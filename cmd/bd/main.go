@@ -88,10 +88,6 @@ var (
 	// Dolt auto-commit policy (flag/config). Values: off | on
 	doltAutoCommit string
 
-	// commandDidWrite is set when a command performs a write that should trigger
-	// auto-flush. Used to decide whether to auto-commit Dolt after the command completes.
-	commandDidWrite bool
-
 	// commandDidExplicitDoltCommit is set when a command already created a Dolt commit
 	// explicitly (e.g., bd sync in dolt-native mode, hook flows, bd vc commit).
 	// This prevents a redundant auto-commit attempt in PersistentPostRun.
@@ -254,7 +250,6 @@ var rootCmd = &cobra.Command{
 		initCommandContext()
 
 		// Reset per-command write tracking (used by Dolt auto-commit).
-		commandDidWrite = false
 		commandDidExplicitDoltCommit = false
 		commandDidWriteTipMetadata = false
 		commandTipIDsShown = make(map[string]struct{})
@@ -974,7 +969,8 @@ var rootCmd = &cobra.Command{
 
 		// Dolt auto-commit: after a successful write command (and after final flush),
 		// create a Dolt commit so changes don't remain only in the working set.
-		if commandDidWrite && !commandDidExplicitDoltCommit {
+		didWrite := flushManager != nil && flushManager.DidWrite()
+		if didWrite && !commandDidExplicitDoltCommit {
 			if err := maybeAutoCommit(rootCtx, doltAutoCommitParams{Command: cmd.Name()}); err != nil {
 				fmt.Fprintf(os.Stderr, "Error: dolt auto-commit failed: %v\n", err)
 				os.Exit(1)

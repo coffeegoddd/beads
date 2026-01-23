@@ -438,9 +438,6 @@ func autoImportIfNewer() {
 // Thread-safe: Safe to call from multiple goroutines (no shared mutable state).
 // No-op if auto-flush is disabled via --no-auto-flush flag.
 func markDirtyAndScheduleFlush() {
-	// Track that this command performed a write.
-	commandDidWrite = true
-
 	// Use FlushManager if available
 	// No FlushManager means sandbox mode or test without flush setup - no-op is correct
 	if flushManager != nil {
@@ -450,9 +447,6 @@ func markDirtyAndScheduleFlush() {
 
 // markDirtyAndScheduleFullExport marks DB as needing a full export (for ID-changing operations)
 func markDirtyAndScheduleFullExport() {
-	// Track that this command performed a write.
-	commandDidWrite = true
-
 	// Use FlushManager if available
 	// No FlushManager means sandbox mode or test without flush setup - no-op is correct
 	if flushManager != nil {

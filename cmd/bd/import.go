@@ -374,10 +374,11 @@ NOTE: Import requires direct database access and does not work with daemon mode.
 			fmt.Fprintf(os.Stderr, "\nAll text and dependency references have been updated.\n")
 		}
 
-		// Mark this command as having performed a write if it changed anything.
-		// This enables Dolt auto-commit in PersistentPostRun.
+		// Record that this command performed a write (for Dolt auto-commit).
 		if result.Created > 0 || result.Updated > 0 || len(result.IDMapping) > 0 {
-			commandDidWrite = true
+			if flushManager != nil {
+				flushManager.RecordWrite()
+			}
 		}
 
 		// Flush immediately after import (no debounce) to ensure daemon sees changes
