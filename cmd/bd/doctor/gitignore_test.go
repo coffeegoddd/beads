@@ -1355,6 +1355,13 @@ func TestGitignoreTemplate_ContainsRedirect(t *testing.T) {
 	}
 }
 
+func TestGitignoreTemplate_ContainsDoltDir(t *testing.T) {
+	// Verify the template ignores the embedded dolt repository directory
+	if !strings.Contains(GitignoreTemplate, "dolt/") {
+		t.Error("GitignoreTemplate should contain 'dolt/' pattern")
+	}
+}
+
 func TestRequiredPatterns_ContainsRedirect(t *testing.T) {
 	// Verify requiredPatterns includes redirect
 	found := false
@@ -1366,6 +1373,20 @@ func TestRequiredPatterns_ContainsRedirect(t *testing.T) {
 	}
 	if !found {
 		t.Error("requiredPatterns should include 'redirect'")
+	}
+}
+
+func TestRequiredPatterns_ContainsDoltDir(t *testing.T) {
+	// Verify requiredPatterns includes dolt/ so bd doctor can detect outdated templates.
+	found := false
+	for _, pattern := range requiredPatterns {
+		if pattern == "dolt/" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Error("requiredPatterns should include 'dolt/'")
 	}
 }
 

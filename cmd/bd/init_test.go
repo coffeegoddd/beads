@@ -129,6 +129,7 @@ func TestInitCommand(t *testing.T) {
 					"*.db-journal",
 					"*.db-wal",
 					"*.db-shm",
+					"dolt/",
 					"daemon.log",
 					"daemon.pid",
 					"bd.sock",

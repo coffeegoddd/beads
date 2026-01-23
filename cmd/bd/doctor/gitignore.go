@@ -19,6 +19,10 @@ const GitignoreTemplate = `# SQLite databases
 *.db-wal
 *.db-shm
 
+# Dolt backend database (never commit)
+# bd init --backend dolt stores the Dolt repo under .beads/dolt/
+dolt/
+
 # Daemon runtime files
 daemon.lock
 daemon.log
@@ -67,6 +71,7 @@ var requiredPatterns = []string{
 	"beads.left.meta.json",
 	"beads.right.meta.json",
 	"*.db?*",
+	"dolt/",
 	"redirect",
 	"last-touched",
 	".sync.lock",
