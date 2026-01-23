@@ -136,6 +136,13 @@ func importFromJSONLInline(ctx context.Context, jsonlPath string, renameOnImport
 		return fmt.Errorf("import failed: %w", err)
 	}
 
+	// Record that this command performed a write (for Dolt auto-commit) when the import changed anything.
+	if result.Created > 0 || result.Updated > 0 || len(result.IDMapping) > 0 {
+		if flushManager != nil {
+			flushManager.RecordWrite()
+		}
+	}
+
 	// Update staleness metadata (same as import.go lines 386-411)
 	// This is critical: without this, CheckStaleness will still report stale
 	if currentHash, hashErr := computeJSONLHash(jsonlPath); hashErr == nil {
