@@ -120,7 +120,10 @@ func New(ctx context.Context, cfg *Config) (*DoltStore, error) {
 	var err error
 
 	if cfg.ServerMode {
-		// Server mode: connect via MySQL protocol to dolt sql-server
+		// Server mode: connect via MySQL protocol to dolt sql-server.
+		//
+		// Note: embedded-only DSN params (nocache / failonlocktimeout / retry*) do not apply here.
+		// Any lock / retry behavior in server mode is handled by the MySQL driver + server.
 		db, connStr, err = openServerConnection(ctx, cfg)
 	} else {
 		// Embedded mode: use Dolt driver directly
@@ -166,9 +169,7 @@ func New(ctx context.Context, cfg *Config) (*DoltStore, error) {
 // openEmbeddedConnection opens a connection using the embedded Dolt driver
 func openEmbeddedConnection(ctx context.Context, cfg *Config) (*sql.DB, string, error) {
 	// First, connect without specifying a database to create it if needed
-	initConnStr := fmt.Sprintf(
-		"file://%s?commitname=%s&commitemail=%s",
-		cfg.Path, cfg.CommitterName, cfg.CommitterEmail)
+	initConnStr := embeddedInitDSN(cfg, embeddedDefaultOpenParams())
 
 	initDB, err := sql.Open("dolt", initConnStr)
 	if err != nil {
@@ -184,9 +185,7 @@ func openEmbeddedConnection(ctx context.Context, cfg *Config) (*sql.DB, string, 
 	_ = initDB.Close()
 
 	// Now connect with the database specified
-	connStr := fmt.Sprintf(
-		"file://%s?commitname=%s&commitemail=%s&database=%s",
-		cfg.Path, cfg.CommitterName, cfg.CommitterEmail, cfg.Database)
+	connStr := embeddedDBDSN(cfg, embeddedDefaultOpenParams())
 
 	db, err := sql.Open("dolt", connStr)
 	if err != nil {

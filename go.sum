@@ -372,10 +372,10 @@ github.com/dolthub/aws-sdk-go-ini-parser v0.0.0-20250305001723-2821c37f6c12 h1:I
 github.com/dolthub/aws-sdk-go-ini-parser v0.0.0-20250305001723-2821c37f6c12/go.mod h1:rN7X8BHwkjPcfMQQ2QTAq/xM3leUSGLfb+1Js7Y6TVo=
 github.com/dolthub/dolt-mcp v0.2.2 h1:bpROmam74n95uU4EA3BpOIVlTDT0pzeFMBwe/YRq2mI=
 github.com/dolthub/dolt-mcp v0.2.2/go.mod h1:S++DJ4QWTAXq+0TNzFa7Oq3IhoT456DJHwAINFAHgDQ=
-github.com/dolthub/dolt/go v0.40.5-0.20260127183936-cd1cf0c457f8 h1:YNXCLLUAe2GfHu9VjF0JpdQQURBkrHCGyX2bAiaqqsc=
-github.com/dolthub/dolt/go v0.40.5-0.20260127183936-cd1cf0c457f8/go.mod h1:qcQO5TAk5iZ9rKQDokztXrEtwRhhFmEoPDL/z3MIR3c=
-github.com/dolthub/driver v0.2.1-0.20260127184153-f2b19a87306a h1:Emg5IuImNg//d6RYpGm0rUDkLNUQhcFvbAMbS8SF7jQ=
-github.com/dolthub/driver v0.2.1-0.20260127184153-f2b19a87306a/go.mod h1:JM0KC3abveYYumMVhnWLMVkdHbZ58afHdNXqOEdXrO0=
+github.com/dolthub/dolt/go v0.40.5-0.20260127212853-80225a3ade73 h1:/dTwsuy8EddhK9rIdnsvCZc2zh/+KXihszMTPAfRE+U=
+github.com/dolthub/dolt/go v0.40.5-0.20260127212853-80225a3ade73/go.mod h1:qcQO5TAk5iZ9rKQDokztXrEtwRhhFmEoPDL/z3MIR3c=
+github.com/dolthub/driver v0.2.1-0.20260127224206-b4d154afae36 h1:6V+LAGuytVKaGuS90wqP4fS74KC8MIimi7R7W2oJHks=
+github.com/dolthub/driver v0.2.1-0.20260127224206-b4d154afae36/go.mod h1:O42j5XsvJCWY4Q/oN6b1f3hXd0ahFmqW8WMqmT8eCIw=
 github.com/dolthub/eventsapi_schema v0.0.0-20250915094920-eadfd39051ca h1:BGFz/0OlKIuC6qHIZQbvPapFvdAJkeEyGXWVgL5clmE=
 github.com/dolthub/eventsapi_schema v0.0.0-20250915094920-eadfd39051ca/go.mod h1:CoDLfgPqHyBtth0Cp+fi/CmC4R81zJNX4wPjShdZ+Bw=
 github.com/dolthub/flatbuffers/v23 v23.3.3-dh.2 h1:u3PMzfF8RkKd3lB9pZ2bfn0qEG+1Gms9599cr0REMww=
