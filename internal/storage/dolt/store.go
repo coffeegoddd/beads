@@ -50,6 +50,37 @@ type DoltStore struct {
 	branch         string // Current branch
 }
 
+var suppressStdoutMu sync.Mutex
+
+// withSuppressedStdout runs fn while redirecting os.Stdout to /dev/null.
+//
+// Why: Dolt's embedded engine currently prints "canceling it..." to stdout when
+// certain background initialization is canceled during close (e.g. autoincrement
+// tracker). That message is user-hostile in bd CLI output.
+//
+// This is a best-effort shim until upstream removes that fmt.Printf.
+func withSuppressedStdout(fn func() error) error {
+	suppressStdoutMu.Lock()
+	defer suppressStdoutMu.Unlock()
+
+	if fn == nil {
+		return nil
+	}
+
+	old := os.Stdout
+	devNull, err := os.OpenFile(os.DevNull, os.O_WRONLY, 0)
+	if err != nil {
+		// Fallback: can't suppress, still run.
+		return fn()
+	}
+	os.Stdout = devNull
+	defer func() {
+		os.Stdout = old
+		_ = devNull.Close()
+	}()
+	return fn()
+}
+
 // Config holds Dolt database configuration
 type Config struct {
 	Path           string // Path to Dolt database directory
@@ -122,7 +153,7 @@ func New(ctx context.Context, cfg *Config) (*DoltStore, error) {
 	if cfg.ServerMode {
 		// Server mode: connect via MySQL protocol to dolt sql-server.
 		//
-		// Note: embedded-only DSN params (nocache / failonlocktimeout / retry*) do not apply here.
+		// Note: embedded-only DSN params (open_retry*) do not apply here.
 		// Any lock / retry behavior in server mode is handled by the MySQL driver + server.
 		db, connStr, err = openServerConnection(ctx, cfg)
 	} else {
@@ -366,7 +397,9 @@ func (s *DoltStore) Close() error {
 	s.closed.Store(true)
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.db.Close()
+	return withSuppressedStdout(func() error {
+		return s.db.Close()
+	})
 }
 
 // Path returns the database directory path

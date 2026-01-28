@@ -8,7 +8,7 @@ require (
 	github.com/charmbracelet/glamour v0.10.0
 	github.com/charmbracelet/huh v0.8.0
 	github.com/charmbracelet/lipgloss v1.1.1-0.20250404203927-76690c660834
-	github.com/dolthub/driver v0.2.1-0.20260127224206-b4d154afae36
+	github.com/dolthub/driver v0.2.1-0.20260128222102-c66221d3e222
 	github.com/fsnotify/fsnotify v1.9.0
 	github.com/go-sql-driver/mysql v1.9.3
 	github.com/gofrs/flock v0.13.0
@@ -85,15 +85,15 @@ require (
 	github.com/denisbrodbeck/machineid v1.0.1 // indirect
 	github.com/dlclark/regexp2 v1.11.0 // indirect
 	github.com/dolthub/aws-sdk-go-ini-parser v0.0.0-20250305001723-2821c37f6c12 // indirect
-	github.com/dolthub/dolt/go v0.40.5-0.20260127212853-80225a3ade73 // indirect
+	github.com/dolthub/dolt/go v0.40.5-0.20260128011125-760516d15c9d // indirect
 	github.com/dolthub/eventsapi_schema v0.0.0-20250915094920-eadfd39051ca // indirect
 	github.com/dolthub/flatbuffers/v23 v23.3.3-dh.2 // indirect
 	github.com/dolthub/fslock v0.0.3 // indirect
 	github.com/dolthub/go-icu-regex v0.0.0-20250916051405-78a38d478790 // indirect
-	github.com/dolthub/go-mysql-server v0.20.1-0.20260122230403-2a3380188573 // indirect
+	github.com/dolthub/go-mysql-server v0.20.1-0.20260127233446-630c5c00410d // indirect
 	github.com/dolthub/gozstd v0.0.0-20240423170813-23a2903bca63 // indirect
 	github.com/dolthub/jsonpath v0.0.2-0.20240227200619-19675ab05c71 // indirect
-	github.com/dolthub/vitess v0.0.0-20260121194826-a5ce52b608e4 // indirect
+	github.com/dolthub/vitess v0.0.0-20260126213359-8ef4cbd3309c // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect
 	github.com/edsrzf/mmap-go v1.2.0 // indirect
 	github.com/envoyproxy/go-control-plane/envoy v1.32.4 // indirect

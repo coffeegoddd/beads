@@ -73,31 +73,24 @@ func TestEmbeddedDSN_DefaultOpenParams_Applied(t *testing.T) {
 	}
 
 	// Default tuning params (embedded only)
-	for _, q := range []url.Values{initQ, mainQ} {
-		if got := q.Get("nocache"); got != "true" {
-			t.Fatalf("expected nocache=true, got %q", got)
-		}
-		if got := q.Get("failonlocktimeout"); got != "true" {
-			t.Fatalf("expected failonlocktimeout=true, got %q", got)
-		}
-	}
+	// no default tuning params asserted currently
 
 	// Default retry params (embedded only)
 	for _, q := range []url.Values{initQ, mainQ} {
-		if got := q.Get("retry"); got != "true" {
-			t.Fatalf("expected retry=true, got %q", got)
+		if got := q.Get("open_retry"); got != "true" {
+			t.Fatalf("expected open_retry=true, got %q", got)
 		}
-		if got := q.Get("retrytimeout"); got != "2s" {
-			t.Fatalf("expected retrytimeout=2s, got %q", got)
+		if got := q.Get("open_retry_max_elapsed"); got != "2s" {
+			t.Fatalf("expected open_retry_max_elapsed=2s, got %q", got)
 		}
-		if got := q.Get("retrymaxattempts"); got != "200" {
-			t.Fatalf("expected retrymaxattempts=200, got %q", got)
+		if got := q.Get("open_retry_max_tries"); got != "200" {
+			t.Fatalf("expected open_retry_max_tries=200, got %q", got)
 		}
-		if got := q.Get("retryinitialdelay"); got != "10ms" {
-			t.Fatalf("expected retryinitialdelay=10ms, got %q", got)
+		if got := q.Get("open_retry_initial"); got != "10ms" {
+			t.Fatalf("expected open_retry_initial=10ms, got %q", got)
 		}
-		if got := q.Get("retrymaxdelay"); got != "100ms" {
-			t.Fatalf("expected retrymaxdelay=100ms, got %q", got)
+		if got := q.Get("open_retry_max_interval"); got != "100ms" {
+			t.Fatalf("expected open_retry_max_interval=100ms, got %q", got)
 		}
 	}
 }

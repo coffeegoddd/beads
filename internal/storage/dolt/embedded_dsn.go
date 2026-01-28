@@ -15,26 +15,23 @@ import (
 // Server mode connections use the MySQL protocol driver and do not accept these DSN params.
 
 func embeddedDefaultTuningParams() url.Values {
-	// These are embedded driver DSN params (see dolthub/driver):
-	// - nocache=true disables Dolt's in-process singleton DB cache (avoid cross-command stale state).
-	// - failonlocktimeout=true fails fast on journal lock timeout (avoid "stuck read-only" fallbacks).
-	return url.Values{
-		"nocache":           []string{"true"},
-		"failonlocktimeout": []string{"true"},
-	}
+	// Reserved for embedded-only tuning params.
+	// Note: low-level Dolt open behavior needed for retries (disable singleton cache,
+	// fail fast on lock timeout) is enabled by the driver when open_retry=true.
+	return url.Values{}
 }
 
 func embeddedDefaultRetryParams() url.Values {
 	// These are embedded driver DSN params (see dolthub/driver):
-	// - retry=true enables retry for transient embedded contention (lock/readonly/manifest cases).
-	// - retrytimeout bounds total retry time (fail fast-ish, but smooths short-lived contention).
-	// - retrymaxattempts is set high so retrytimeout is the primary bound.
+	// - open_retry=true enables bounded retries during OpenConnector (engine open).
+	// - open_retry_max_elapsed bounds total retry time.
+	// - open_retry_max_tries is set high so open_retry_max_elapsed is the primary bound.
 	return url.Values{
-		"retry":             []string{"true"},
-		"retrytimeout":      []string{"2s"},
-		"retrymaxattempts":  []string{"200"},
-		"retryinitialdelay": []string{"10ms"},
-		"retrymaxdelay":     []string{"100ms"},
+		"open_retry":             []string{"true"},
+		"open_retry_max_elapsed": []string{"2s"},
+		"open_retry_max_tries":   []string{"200"},
+		"open_retry_initial":     []string{"10ms"},
+		"open_retry_max_interval": []string{"100ms"},
 	}
 }
 
