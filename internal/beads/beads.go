@@ -231,8 +231,8 @@ func findDatabaseInBeadsDir(beadsDir string, warnOnIssues bool) string {
 	// Check for metadata.json first (single source of truth)
 	if cfg, err := configfile.Load(beadsDir); err == nil && cfg != nil {
 		backend := cfg.GetBackend()
-		if backend == configfile.BackendDolt {
-			// For Dolt server mode, database is on the server - no local directory required
+		if backend == configfile.BackendDolt || backend == configfile.BackendEmbeddedDolt {
+			// For directory-backed backends, the database isn't necessarily a local .db file.
 			return cfg.DatabasePath(beadsDir)
 		} else {
 			// For SQLite, check if the .db file exists

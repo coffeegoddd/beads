@@ -103,6 +103,8 @@ func NewFromConfigWithOptions(ctx context.Context, beadsDir string, opts Options
 			opts.Database = cfg.GetDoltDatabase()
 		}
 		return NewWithOptions(ctx, backend, cfg.DatabasePath(beadsDir), opts)
+	case configfile.BackendEmbeddedDolt:
+		return NewWithOptions(ctx, backend, cfg.DatabasePath(beadsDir), opts)
 	default:
 		return nil, fmt.Errorf("unknown storage backend in config: %s", backend)
 	}

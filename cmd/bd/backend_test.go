@@ -29,6 +29,9 @@ func TestBackendListText(t *testing.T) {
 	if !strings.Contains(output, "dolt") {
 		t.Error("output should contain 'dolt' backend")
 	}
+	if !strings.Contains(output, "embedded-dolt") {
+		t.Error("output should contain 'embedded-dolt' backend")
+	}
 	if !strings.Contains(output, "jsonl") {
 		t.Error("output should contain 'jsonl' backend")
 	}
@@ -63,9 +66,9 @@ func TestBackendListJSON(t *testing.T) {
 		t.Fatalf("failed to parse JSON output: %v\nOutput: %s", err, output)
 	}
 
-	// Verify we have 3 backends
-	if len(result.Backends) != 3 {
-		t.Errorf("expected 3 backends, got %d", len(result.Backends))
+	// Verify we have 4 backends
+	if len(result.Backends) != 4 {
+		t.Errorf("expected 4 backends, got %d", len(result.Backends))
 	}
 
 	// Verify backend names
@@ -77,7 +80,7 @@ func TestBackendListJSON(t *testing.T) {
 		}
 	}
 
-	for _, expected := range []string{"sqlite", "dolt", "jsonl"} {
+	for _, expected := range []string{"sqlite", "dolt", "embedded-dolt", "jsonl"} {
 		if !names[expected] {
 			t.Errorf("missing backend: %s", expected)
 		}
@@ -209,8 +212,8 @@ func TestBackendShowJSONL(t *testing.T) {
 
 // TestAvailableBackendsStructure verifies the availableBackends slice is well-formed.
 func TestAvailableBackendsStructure(t *testing.T) {
-	if len(availableBackends) != 3 {
-		t.Errorf("expected 3 backends, got %d", len(availableBackends))
+	if len(availableBackends) != 4 {
+		t.Errorf("expected 4 backends, got %d", len(availableBackends))
 	}
 
 	for i, b := range availableBackends {
@@ -228,7 +231,7 @@ func TestAvailableBackendsStructure(t *testing.T) {
 		names[b.Name] = true
 	}
 
-	for _, expected := range []string{"sqlite", "dolt", "jsonl"} {
+	for _, expected := range []string{"sqlite", "dolt", "embedded-dolt", "jsonl"} {
 		if !names[expected] {
 			t.Errorf("missing backend: %s", expected)
 		}

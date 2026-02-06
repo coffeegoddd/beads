@@ -121,6 +121,14 @@ func (c *Config) DatabasePath(beadsDir string) string {
 		}
 		return filepath.Join(beadsDir, "dolt")
 	}
+	if backend == BackendEmbeddedDolt {
+		// Embedded Dolt is directory-backed, like Dolt, but uses a separate on-disk location.
+		// This keeps it isolated from the server-mode dolt backend during development.
+		if filepath.IsAbs(c.Database) {
+			return c.Database
+		}
+		return filepath.Join(beadsDir, "embedded-dolt")
+	}
 
 	// SQLite (default)
 	db := strings.TrimSpace(c.Database)
@@ -164,6 +172,9 @@ func (c *Config) GetStaleClosedIssuesDays() int {
 const (
 	BackendSQLite = "sqlite"
 	BackendDolt   = "dolt"
+	// BackendEmbeddedDolt is a placeholder backend for a future embedded Dolt implementation.
+	// It is intentionally distinct from BackendDolt (which is the server-mode Dolt backend).
+	BackendEmbeddedDolt = "embedded-dolt"
 )
 
 // BackendCapabilities describes behavioral constraints for a storage backend.
@@ -186,6 +197,9 @@ func CapabilitiesForBackend(backend string) BackendCapabilities {
 	case BackendDolt:
 		// Dolt uses server mode which supports multi-writer access
 		return BackendCapabilities{SingleProcessOnly: false}
+	case BackendEmbeddedDolt:
+		// Embedded Dolt is expected to be single-process until implemented otherwise.
+		return BackendCapabilities{SingleProcessOnly: true}
 	default:
 		return BackendCapabilities{SingleProcessOnly: true}
 	}

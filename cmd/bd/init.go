@@ -69,8 +69,8 @@ variable.`,
 		serverUser, _ := cmd.Flags().GetString("server-user")
 
 		// Validate backend flag
-		if backend != "" && backend != configfile.BackendSQLite && backend != configfile.BackendDolt {
-			fmt.Fprintf(os.Stderr, "Error: invalid backend '%s' (must be 'sqlite' or 'dolt')\n", backend)
+		if backend != "" && backend != configfile.BackendSQLite && backend != configfile.BackendDolt && backend != configfile.BackendEmbeddedDolt {
+			fmt.Fprintf(os.Stderr, "Error: invalid backend '%s' (must be 'sqlite', 'dolt', or 'embedded-dolt')\n", backend)
 			os.Exit(1)
 		}
 		if backend == "" {
@@ -173,9 +173,13 @@ variable.`,
 		// Precedence: --db > BEADS_DB > BEADS_DIR > default (.beads/beads.db)
 		// If there's a redirect file, use the redirect target (GH#bd-0qel)
 		initDBPath := dbPath
-		if backend == configfile.BackendDolt {
+		if backend == configfile.BackendDolt || backend == configfile.BackendEmbeddedDolt {
 			// Dolt backend: use computed beadsDirForInit
-			initDBPath = filepath.Join(beadsDirForInit, "dolt")
+			if backend == configfile.BackendDolt {
+				initDBPath = filepath.Join(beadsDirForInit, "dolt")
+			} else {
+				initDBPath = filepath.Join(beadsDirForInit, "embedded-dolt")
+			}
 		} else if initDBPath == "" {
 			// SQLite backend: use computed beadsDirForInit
 			initDBPath = filepath.Join(beadsDirForInit, beads.CanonicalDatabaseName)
@@ -339,12 +343,60 @@ variable.`,
 
 		ctx := rootCtx
 
+		// Embedded Dolt backend (placeholder):
+		// This backend exists to land CLI / config plumbing. The storage implementation
+		// currently returns "unimplemented" for all operations, so we skip DB metadata
+		// initialization and only write config files.
+		if backend == configfile.BackendEmbeddedDolt {
+			if useLocalBeads {
+				// Create or preserve metadata.json
+				existingCfg, err := configfile.Load(beadsDir)
+				if err != nil && !quiet {
+					fmt.Fprintf(os.Stderr, "Warning: failed to load existing metadata.json: %v\n", err)
+				}
+				cfg := existingCfg
+				if cfg == nil {
+					cfg = configfile.DefaultConfig()
+				}
+				cfg.Backend = backend
+				if cfg.Database == "" || cfg.Database == beads.CanonicalDatabaseName {
+					cfg.Database = "embedded-dolt"
+				}
+				if err := cfg.Save(beadsDir); err != nil && !quiet {
+					fmt.Fprintf(os.Stderr, "Warning: failed to create metadata.json: %v\n", err)
+				}
+
+				// Create config.yaml template (prefix is normally stored in DB config; this backend is stubbed)
+				if err := createConfigYaml(beadsDir, false, ""); err != nil && !quiet {
+					fmt.Fprintf(os.Stderr, "Warning: failed to create config.yaml: %v\n", err)
+				}
+
+				// Create README.md
+				if err := createReadme(beadsDir); err != nil && !quiet {
+					fmt.Fprintf(os.Stderr, "Warning: failed to create README.md: %v\n", err)
+				}
+			}
+
+			if !quiet {
+				fmt.Printf("\n%s bd initialized successfully!\n\n", ui.RenderPass("✓"))
+				fmt.Printf("  Backend: %s\n", ui.RenderAccent(backend))
+				fmt.Printf("  Database: %s\n", ui.RenderAccent(filepath.Join(beadsDir, "embedded-dolt")))
+				fmt.Printf("  Note: %s\n\n", ui.RenderAccent("embedded-dolt is a placeholder backend; operations are not implemented yet"))
+				fmt.Printf("Run %s to get started.\n\n", ui.RenderAccent("bd backend show"))
+			}
+			return
+		}
+
 		// Create storage backend based on --backend flag
 		var storagePath string
 		var store storage.Storage
-		if backend == configfile.BackendDolt {
+		if backend == configfile.BackendDolt || backend == configfile.BackendEmbeddedDolt {
 			// Dolt uses a directory, not a file
-			storagePath = filepath.Join(beadsDir, "dolt")
+			if backend == configfile.BackendDolt {
+				storagePath = filepath.Join(beadsDir, "dolt")
+			} else {
+				storagePath = filepath.Join(beadsDir, "embedded-dolt")
+			}
 			store, err = factory.New(ctx, backend, storagePath)
 		} else {
 			storagePath = initDBPath
@@ -438,9 +490,13 @@ variable.`,
 			// In Dolt mode, metadata.json.database should point to the Dolt directory (not beads.db).
 			// Backward-compat: older dolt setups left this as "beads.db", which is misleading and
 			// can trigger SQLite-only code paths.
-			if backend == configfile.BackendDolt {
+			if backend == configfile.BackendDolt || backend == configfile.BackendEmbeddedDolt {
 				if cfg.Database == "" || cfg.Database == beads.CanonicalDatabaseName {
-					cfg.Database = "dolt"
+					if backend == configfile.BackendDolt {
+						cfg.Database = "dolt"
+					} else {
+						cfg.Database = "embedded-dolt"
+					}
 				}
 
 				// Save server mode configuration (bd-dolt.2.2)
