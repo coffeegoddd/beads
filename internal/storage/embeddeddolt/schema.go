@@ -1,7 +1,14 @@
-package dolt
+package embeddeddolt
 
-// schema defines the MySQL-compatible database schema for Dolt.
-// This mirrors the SQLite schema but uses MySQL syntax.
+// schema defines the MySQL-compatible database schema for embedded Dolt.
+//
+// This is intentionally forked from internal/storage/dolt/schema.go, but with
+// all dirty/flush-related tables removed:
+// - dirty_issues
+// - export_hashes
+// - repo_mtimes
+//
+// Embedded-dolt is DB-only: no JSONL export/import, no dirty tracking, no flush.
 const schema = `
 -- Issues table
 CREATE TABLE IF NOT EXISTS issues (
@@ -154,22 +161,6 @@ CREATE TABLE IF NOT EXISTS metadata (
     value TEXT NOT NULL
 );
 
--- Dirty issues table (for incremental export)
-CREATE TABLE IF NOT EXISTS dirty_issues (
-    issue_id VARCHAR(255) PRIMARY KEY,
-    marked_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    INDEX idx_dirty_issues_marked_at (marked_at),
-    CONSTRAINT fk_dirty_issue FOREIGN KEY (issue_id) REFERENCES issues(id) ON DELETE CASCADE
-);
-
--- Export hashes table
-CREATE TABLE IF NOT EXISTS export_hashes (
-    issue_id VARCHAR(255) PRIMARY KEY,
-    content_hash VARCHAR(64) NOT NULL,
-    exported_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    CONSTRAINT fk_export_issue FOREIGN KEY (issue_id) REFERENCES issues(id) ON DELETE CASCADE
-);
-
 -- Child counters table
 CREATE TABLE IF NOT EXISTS child_counters (
     parent_id VARCHAR(255) PRIMARY KEY,
@@ -201,15 +192,6 @@ CREATE TABLE IF NOT EXISTS compaction_snapshots (
     created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     INDEX idx_comp_snap_issue (issue_id, compaction_level, created_at DESC),
     CONSTRAINT fk_comp_snap_issue FOREIGN KEY (issue_id) REFERENCES issues(id) ON DELETE CASCADE
-);
-
--- Repository mtimes table (for multi-repo)
-CREATE TABLE IF NOT EXISTS repo_mtimes (
-    repo_path VARCHAR(512) PRIMARY KEY,
-    jsonl_path VARCHAR(512) NOT NULL,
-    mtime_ns BIGINT NOT NULL,
-    last_checked DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    INDEX idx_repo_mtimes_checked (last_checked)
 );
 
 -- Routes table (prefix-to-path routing configuration)
@@ -273,10 +255,9 @@ INSERT IGNORE INTO config (` + "`key`" + `, value) VALUES
     ('auto_compact_enabled', 'false');
 `
 
-// readyIssuesView is a MySQL-compatible view for ready work
+// readyIssuesView is a MySQL-compatible view for ready work.
 // Note: Dolt supports recursive CTEs like SQLite.
 // Uses LEFT JOIN instead of NOT EXISTS to avoid Dolt mergeJoinIter panic.
-// See: https://github.com/dolthub/go-mysql-server/issues/3413
 const readyIssuesView = `
 CREATE OR REPLACE VIEW ready_issues AS
 WITH RECURSIVE

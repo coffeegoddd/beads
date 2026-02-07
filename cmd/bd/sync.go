@@ -15,6 +15,7 @@ import (
 	"github.com/steveyegge/beads/internal/config"
 	"github.com/steveyegge/beads/internal/debug"
 	"github.com/steveyegge/beads/internal/storage"
+	"github.com/steveyegge/beads/internal/storage/embeddeddolt"
 	"github.com/steveyegge/beads/internal/syncbranch"
 )
 
@@ -186,6 +187,13 @@ The --full flag provides the legacy full sync behavior for backwards compatibili
 		// initialize it here after closing the daemon connection.
 		if err := ensureStoreActive(); err != nil {
 			FatalError("failed to initialize store: %v", err)
+		}
+
+		// Embedded-dolt is DB-only: JSONL sync is intentionally disabled.
+		if store != nil {
+			if _, ok := store.(*embeddeddolt.EmbeddedDoltStore); ok {
+				FatalError("bd sync is disabled for embedded-dolt backend")
+			}
 		}
 
 		// Resolve noGitHistory based on fromMain (fixes #417)

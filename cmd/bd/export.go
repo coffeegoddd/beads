@@ -13,6 +13,7 @@ import (
 
 	"github.com/spf13/cobra"
 	"github.com/steveyegge/beads/internal/debug"
+	"github.com/steveyegge/beads/internal/storage/embeddeddolt"
 	"github.com/steveyegge/beads/internal/storage/factory"
 	"github.com/steveyegge/beads/internal/storage/sqlite"
 	"github.com/steveyegge/beads/internal/types"
@@ -195,6 +196,11 @@ Examples:
 				os.Exit(1)
 			}
 			defer func() { _ = store.Close() }()
+		}
+
+		// Embedded-dolt is DB-only: JSONL export is intentionally disabled.
+		if _, ok := store.(*embeddeddolt.EmbeddedDoltStore); ok {
+			FatalErrorRespectJSON("bd export is disabled for embedded-dolt backend")
 		}
 
 		// Check database freshness before reading (bd-2q6d)

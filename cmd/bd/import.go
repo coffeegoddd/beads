@@ -16,6 +16,7 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/steveyegge/beads/internal/beads"
 	"github.com/steveyegge/beads/internal/debug"
+	"github.com/steveyegge/beads/internal/storage/embeddeddolt"
 	"github.com/steveyegge/beads/internal/storage/factory"
 	"github.com/steveyegge/beads/internal/types"
 	"github.com/steveyegge/beads/internal/utils"
@@ -75,6 +76,13 @@ NOTE: Import requires direct database access and does not work with daemon mode.
 			fmt.Fprintf(os.Stderr, "Or pipe data via stdin:\n")
 			fmt.Fprintf(os.Stderr, "  cat data.jsonl | bd import\n")
 			os.Exit(1)
+		}
+
+		// Embedded-dolt is DB-only: JSONL import is intentionally disabled.
+		if store != nil {
+			if _, ok := store.(*embeddeddolt.EmbeddedDoltStore); ok {
+				FatalError("bd import is disabled for embedded-dolt backend")
+			}
 		}
 
 		// Ensure database directory exists (auto-create if needed)
@@ -219,10 +227,10 @@ NOTE: Import requires direct database access and does not work with daemon mode.
 					}()
 					in = f
 					scanner = bufio.NewScanner(in)
-					allIssues = nil        // Reset issues list
-					deletionMarkers = nil  // Reset deletion markers list
-					lineNum = 0            // Reset line counter
-					continue               // Restart parsing from beginning
+					allIssues = nil       // Reset issues list
+					deletionMarkers = nil // Reset deletion markers list
+					lineNum = 0           // Reset line counter
+					continue              // Restart parsing from beginning
 				} else {
 					// Can't retry stdin - should not happen since git conflicts only in files
 					fmt.Fprintf(os.Stderr, "Error: Cannot retry merge from stdin\n")

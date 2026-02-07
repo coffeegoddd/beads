@@ -16,6 +16,7 @@ import (
 	"github.com/steveyegge/beads/internal/routing"
 	"github.com/steveyegge/beads/internal/rpc"
 	"github.com/steveyegge/beads/internal/storage"
+	"github.com/steveyegge/beads/internal/storage/embeddeddolt"
 	"github.com/steveyegge/beads/internal/storage/factory"
 	"github.com/steveyegge/beads/internal/storage/sqlite"
 	"github.com/steveyegge/beads/internal/timeparsing"
@@ -779,6 +780,13 @@ var createCmd = &cobra.Command{
 // Always writes local JSONL as a safety net (even in dolt-native mode).
 func flushRoutedRepo(targetStore storage.Storage, repoPath string) {
 	ctx := context.Background()
+
+	// Embedded-dolt is DB-only: never export JSONL.
+	if targetStore != nil {
+		if _, ok := targetStore.(*embeddeddolt.EmbeddedDoltStore); ok {
+			return
+		}
+	}
 
 	// Expand the repo path and construct the .beads directory path
 	targetBeadsDir := routing.ExpandPath(repoPath)

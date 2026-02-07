@@ -168,4 +168,3 @@ func (e *Executor) QueryContext(ctx context.Context, database string, query stri
 	})
 	return out, err
 }
-

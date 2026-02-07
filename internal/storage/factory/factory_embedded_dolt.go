@@ -23,4 +23,3 @@ func init() {
 		return store, nil
 	})
 }
-

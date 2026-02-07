@@ -17,7 +17,6 @@ import (
 	"github.com/steveyegge/beads/internal/configfile"
 	"github.com/steveyegge/beads/internal/git"
 	"github.com/steveyegge/beads/internal/storage"
-	"github.com/steveyegge/beads/internal/storage/embeddeddolt"
 	"github.com/steveyegge/beads/internal/storage/factory"
 	"github.com/steveyegge/beads/internal/storage/sqlite"
 	"github.com/steveyegge/beads/internal/syncbranch"
@@ -345,60 +344,6 @@ variable.`,
 
 		ctx := rootCtx
 
-		// Embedded Dolt backend (placeholder):
-		// This backend exists to land CLI / config plumbing. The storage implementation
-		// currently returns "unimplemented" for all operations, so we skip DB metadata
-		// initialization and only write config files.
-		if backend == configfile.BackendEmbeddedDolt {
-			// Embedded Dolt (repo-local) initialization.
-			// Use `.beads/dolt` deterministically.
-			embeddedDirName := "dolt"
-			embeddedDirPath := filepath.Join(beadsDir, "dolt")
-
-			// Initialize/open the embedded dolt database "beads" inside embeddedDirPath.
-			// Even though the storage interface methods are stubbed, we want the dolt repo on disk.
-			if s, err := embeddeddolt.New(ctx, &embeddeddolt.Config{Path: embeddedDirPath}); err == nil {
-				_ = s.Close()
-			}
-
-			if useLocalBeads {
-				// Create or preserve metadata.json
-				existingCfg, err := configfile.Load(beadsDir)
-				if err != nil && !quiet {
-					fmt.Fprintf(os.Stderr, "Warning: failed to load existing metadata.json: %v\n", err)
-				}
-				cfg := existingCfg
-				if cfg == nil {
-					cfg = configfile.DefaultConfig()
-				}
-				cfg.Backend = backend
-				// Store the chosen embedded dolt directory name ("dolt") in metadata.json.
-				cfg.Database = embeddedDirName
-				if err := cfg.Save(beadsDir); err != nil && !quiet {
-					fmt.Fprintf(os.Stderr, "Warning: failed to create metadata.json: %v\n", err)
-				}
-
-				// Create config.yaml template (prefix is normally stored in DB config; this backend is stubbed)
-				if err := createConfigYaml(beadsDir, false, ""); err != nil && !quiet {
-					fmt.Fprintf(os.Stderr, "Warning: failed to create config.yaml: %v\n", err)
-				}
-
-				// Create README.md
-				if err := createReadme(beadsDir); err != nil && !quiet {
-					fmt.Fprintf(os.Stderr, "Warning: failed to create README.md: %v\n", err)
-				}
-			}
-
-			if !quiet {
-				fmt.Printf("\n%s bd initialized successfully!\n\n", ui.RenderPass("✓"))
-				fmt.Printf("  Backend: %s\n", ui.RenderAccent(backend))
-				fmt.Printf("  Database: %s\n", ui.RenderAccent(embeddedDirPath))
-				fmt.Printf("  Note: %s\n\n", ui.RenderAccent("embedded-dolt initializes a local dolt repo; storage operations are not implemented yet"))
-				fmt.Printf("Run %s to get started.\n\n", ui.RenderAccent("bd backend show"))
-			}
-			return
-		}
-
 		// Create storage backend based on --backend flag
 		var storagePath string
 		var store storage.Storage
@@ -407,7 +352,8 @@ variable.`,
 			if backend == configfile.BackendDolt {
 				storagePath = filepath.Join(beadsDir, "dolt")
 			} else {
-				storagePath = filepath.Join(beadsDir, "embedded-dolt")
+				// Embedded Dolt uses the same deterministic repo-local directory name.
+				storagePath = filepath.Join(beadsDir, "dolt")
 			}
 			store, err = factory.New(ctx, backend, storagePath)
 		} else {
@@ -507,7 +453,7 @@ variable.`,
 					if backend == configfile.BackendDolt {
 						cfg.Database = "dolt"
 					} else {
-						cfg.Database = "embedded-dolt"
+						cfg.Database = "dolt"
 					}
 				}
 

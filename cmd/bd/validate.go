@@ -18,9 +18,9 @@ var (
 
 // validateResult holds the outcome of all validation checks
 type validateResult struct {
-	Path      string         `json:"path"`
-	Checks    []doctorCheck  `json:"checks"`
-	OverallOK bool           `json:"overall_ok"`
+	Path      string        `json:"path"`
+	Checks    []doctorCheck `json:"checks"`
+	OverallOK bool          `json:"overall_ok"`
 }
 
 var validateCmd = &cobra.Command{

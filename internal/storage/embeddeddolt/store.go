@@ -16,7 +16,6 @@ import (
 	"time"
 
 	"github.com/steveyegge/beads/internal/storage"
-	"github.com/steveyegge/beads/internal/storage/dolt"
 	"github.com/steveyegge/beads/internal/types"
 )
 
@@ -42,7 +41,7 @@ type Config struct {
 type EmbeddedDoltStore struct {
 	path     string
 	readOnly bool
-	exec *Executor
+	exec     *Executor
 }
 
 var _ storage.Storage = (*EmbeddedDoltStore)(nil)
@@ -85,22 +84,22 @@ func New(ctx context.Context, cfg *Config) (*EmbeddedDoltStore, error) {
 
 	// Initialize schema in the "beads" database.
 	if err := exec.withDB(ctx, "beads", func(db *sql.DB) error {
-		return dolt.InitSchemaOnDB(ctx, db)
+		return InitSchemaOnDB(ctx, db)
 	}); err != nil {
 		return nil, fmt.Errorf("failed to initialize embedded dolt schema: %w", err)
 	}
 
 	// Commit schema changes (best-effort: ignore "nothing to commit").
-	if _, err := exec.ExecContext(ctx, "beads", "CALL DOLT_COMMIT('-Am', 'schema: init')"); err != nil {
+	if _, err := exec.ExecContext(ctx, "beads", "CALL DOLT_COMMIT('-Am', 'schema: embedded (no jsonl/flush)')"); err != nil {
 		if !strings.Contains(strings.ToLower(err.Error()), "nothing to commit") {
 			return nil, fmt.Errorf("failed to dolt_commit schema: %w", err)
 		}
 	}
 
 	return &EmbeddedDoltStore{
-		path:      absPath,
-		readOnly:  cfg.ReadOnly,
-		exec:      exec,
+		path:     absPath,
+		readOnly: cfg.ReadOnly,
+		exec:     exec,
 	}, nil
 }
 
@@ -353,17 +352,20 @@ func (s *EmbeddedDoltStore) GetMoleculeProgress(ctx context.Context, moleculeID 
 
 func (s *EmbeddedDoltStore) GetDirtyIssues(ctx context.Context) ([]string, error) {
 	_ = ctx
-	return nil, unimplemented("GetDirtyIssues")
+	// Embedded-dolt is DB-only: dirty tracking is disabled.
+	return []string{}, nil
 }
 
 func (s *EmbeddedDoltStore) GetDirtyIssueHash(ctx context.Context, issueID string) (string, error) {
 	_, _ = ctx, issueID
-	return "", unimplemented("GetDirtyIssueHash")
+	// Embedded-dolt is DB-only: dirty tracking is disabled.
+	return "", nil
 }
 
 func (s *EmbeddedDoltStore) ClearDirtyIssuesByID(ctx context.Context, issueIDs []string) error {
 	_, _ = ctx, issueIDs
-	return unimplemented("ClearDirtyIssuesByID")
+	// Embedded-dolt is DB-only: dirty tracking is disabled.
+	return nil
 }
 
 // =============================================================================
@@ -372,17 +374,20 @@ func (s *EmbeddedDoltStore) ClearDirtyIssuesByID(ctx context.Context, issueIDs [
 
 func (s *EmbeddedDoltStore) GetExportHash(ctx context.Context, issueID string) (string, error) {
 	_, _ = ctx, issueID
-	return "", unimplemented("GetExportHash")
+	// Embedded-dolt is DB-only: export hashes are disabled.
+	return "", nil
 }
 
 func (s *EmbeddedDoltStore) SetExportHash(ctx context.Context, issueID, contentHash string) error {
 	_, _, _ = ctx, issueID, contentHash
-	return unimplemented("SetExportHash")
+	// Embedded-dolt is DB-only: export hashes are disabled.
+	return nil
 }
 
 func (s *EmbeddedDoltStore) ClearAllExportHashes(ctx context.Context) error {
 	_ = ctx
-	return unimplemented("ClearAllExportHashes")
+	// Embedded-dolt is DB-only: export hashes are disabled.
+	return nil
 }
 
 // =============================================================================
@@ -391,12 +396,14 @@ func (s *EmbeddedDoltStore) ClearAllExportHashes(ctx context.Context) error {
 
 func (s *EmbeddedDoltStore) GetJSONLFileHash(ctx context.Context) (string, error) {
 	_ = ctx
-	return "", unimplemented("GetJSONLFileHash")
+	// Embedded-dolt is DB-only: JSONL file integrity tracking is disabled.
+	return "", nil
 }
 
 func (s *EmbeddedDoltStore) SetJSONLFileHash(ctx context.Context, fileHash string) error {
 	_, _ = ctx, fileHash
-	return unimplemented("SetJSONLFileHash")
+	// Embedded-dolt is DB-only: JSONL file integrity tracking is disabled.
+	return nil
 }
 
 // =============================================================================
@@ -413,13 +420,37 @@ func (s *EmbeddedDoltStore) GetNextChildID(ctx context.Context, parentID string)
 // =============================================================================
 
 func (s *EmbeddedDoltStore) SetConfig(ctx context.Context, key, value string) error {
+	if s == nil || s.exec == nil {
+		return fmt.Errorf("embedded-dolt store is not initialized")
+	}
 	_, _, _ = ctx, key, value
-	return unimplemented("SetConfig")
+	_, err := s.exec.ExecContext(ctx, "beads", `
+		INSERT INTO config (`+"`key`"+`, value) VALUES (?, ?)
+		ON DUPLICATE KEY UPDATE value = VALUES(value)
+	`, key, value)
+	if err != nil {
+		return fmt.Errorf("failed to set config: %w", err)
+	}
+	return nil
 }
 
 func (s *EmbeddedDoltStore) GetConfig(ctx context.Context, key string) (string, error) {
-	_, _ = ctx, key
-	return "", unimplemented("GetConfig")
+	if s == nil || s.exec == nil {
+		return "", fmt.Errorf("embedded-dolt store is not initialized")
+	}
+	var out string
+	err := s.exec.withDB(ctx, "beads", func(db *sql.DB) error {
+		err := db.QueryRowContext(ctx, "SELECT value FROM config WHERE `key` = ?", key).Scan(&out)
+		if errors.Is(err, sql.ErrNoRows) {
+			out = ""
+			return nil
+		}
+		return err
+	})
+	if err != nil {
+		return "", fmt.Errorf("failed to get config: %w", err)
+	}
+	return out, nil
 }
 
 func (s *EmbeddedDoltStore) GetAllConfig(ctx context.Context) (map[string]string, error) {
@@ -447,13 +478,36 @@ func (s *EmbeddedDoltStore) GetCustomTypes(ctx context.Context) ([]string, error
 // =============================================================================
 
 func (s *EmbeddedDoltStore) SetMetadata(ctx context.Context, key, value string) error {
-	_, _, _ = ctx, key, value
-	return unimplemented("SetMetadata")
+	if s == nil || s.exec == nil {
+		return fmt.Errorf("embedded-dolt store is not initialized")
+	}
+	_, err := s.exec.ExecContext(ctx, "beads", `
+		INSERT INTO metadata (`+"`key`"+`, value) VALUES (?, ?)
+		ON DUPLICATE KEY UPDATE value = VALUES(value)
+	`, key, value)
+	if err != nil {
+		return fmt.Errorf("failed to set metadata: %w", err)
+	}
+	return nil
 }
 
 func (s *EmbeddedDoltStore) GetMetadata(ctx context.Context, key string) (string, error) {
-	_, _ = ctx, key
-	return "", unimplemented("GetMetadata")
+	if s == nil || s.exec == nil {
+		return "", fmt.Errorf("embedded-dolt store is not initialized")
+	}
+	var out string
+	err := s.exec.withDB(ctx, "beads", func(db *sql.DB) error {
+		err := db.QueryRowContext(ctx, "SELECT value FROM metadata WHERE `key` = ?", key).Scan(&out)
+		if errors.Is(err, sql.ErrNoRows) {
+			out = ""
+			return nil
+		}
+		return err
+	})
+	if err != nil {
+		return "", fmt.Errorf("failed to get metadata: %w", err)
+	}
+	return out, nil
 }
 
 // =============================================================================
@@ -507,4 +561,3 @@ func (s *EmbeddedDoltStore) UnderlyingConn(ctx context.Context) (*sql.Conn, erro
 	// Intentionally unsupported: executor is short-lived and does not expose conns.
 	return nil, unimplemented("UnderlyingConn")
 }
-

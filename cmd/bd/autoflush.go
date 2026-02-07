@@ -20,6 +20,7 @@ import (
 	"github.com/steveyegge/beads/internal/config"
 	"github.com/steveyegge/beads/internal/debug"
 	"github.com/steveyegge/beads/internal/storage"
+	"github.com/steveyegge/beads/internal/storage/embeddeddolt"
 	"github.com/steveyegge/beads/internal/syncbranch"
 	"github.com/steveyegge/beads/internal/types"
 	"github.com/steveyegge/beads/internal/ui"
@@ -480,6 +481,13 @@ func markDirtyAndScheduleFlush() {
 	// Track that this command performed a write (atomic to avoid data races).
 	commandDidWrite.Store(true)
 
+	// Embedded-dolt is DB-only: no JSONL export, no flush.
+	if store != nil {
+		if _, ok := store.(*embeddeddolt.EmbeddedDoltStore); ok {
+			return
+		}
+	}
+
 	// Use FlushManager if available
 	// No FlushManager means sandbox mode or test without flush setup - no-op is correct
 	if flushManager != nil {
@@ -491,6 +499,13 @@ func markDirtyAndScheduleFlush() {
 func markDirtyAndScheduleFullExport() {
 	// Track that this command performed a write (atomic to avoid data races).
 	commandDidWrite.Store(true)
+
+	// Embedded-dolt is DB-only: no JSONL export, no flush.
+	if store != nil {
+		if _, ok := store.(*embeddeddolt.EmbeddedDoltStore); ok {
+			return
+		}
+	}
 
 	// Use FlushManager if available
 	// No FlushManager means sandbox mode or test without flush setup - no-op is correct
@@ -871,6 +886,13 @@ type flushState struct {
 //   - No dirty issues found (incremental mode only)
 //   - Sync mode is dolt-native (bd-ixip: skip JSONL export)
 func flushToJSONLWithState(state flushState) {
+	// Embedded-dolt is DB-only: never touch JSONL or flush state.
+	if store != nil {
+		if _, ok := store.(*embeddeddolt.EmbeddedDoltStore); ok {
+			return
+		}
+	}
+
 	// Check if store is still active (not closed) and not nil
 	storeMutex.Lock()
 	if !storeActive || store == nil {
