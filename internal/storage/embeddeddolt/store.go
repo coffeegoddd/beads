@@ -8,13 +8,16 @@ package embeddeddolt
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
 
+	"github.com/steveyegge/beads/internal/idgen"
 	"github.com/steveyegge/beads/internal/storage"
 	"github.com/steveyegge/beads/internal/types"
 )
@@ -24,6 +27,171 @@ var ErrUnimplemented = errors.New("embedded-dolt backend is not implemented")
 
 func unimplemented(method string) error {
 	return fmt.Errorf("%w: %s", ErrUnimplemented, method)
+}
+
+func nullIfEmpty(s string) any {
+	if strings.TrimSpace(s) == "" {
+		return nil
+	}
+	return s
+}
+
+// DoltCommit creates a Dolt commit in the embedded database.
+// This is an embedded-dolt-only helper (not part of storage.Storage).
+//
+// Best-effort callers may choose to ignore "nothing to commit" errors.
+func (s *EmbeddedDoltStore) DoltCommit(ctx context.Context, message string) error {
+	if s == nil || s.exec == nil {
+		return fmt.Errorf("embedded-dolt store is not initialized")
+	}
+	msg := strings.TrimSpace(message)
+	if msg == "" {
+		msg = "bd: create"
+	}
+	_, err := s.exec.ExecContext(ctx, "beads", "CALL DOLT_COMMIT('-Am', ?)", msg)
+	if err != nil {
+		if strings.Contains(strings.ToLower(err.Error()), "nothing to commit") {
+			return nil
+		}
+		return fmt.Errorf("failed to dolt_commit: %w", err)
+	}
+	return nil
+}
+
+// =============================================================================
+// ID generation (embedded-dolt)
+// =============================================================================
+
+type adaptiveIDConfig struct {
+	maxCollisionProb float64
+	minLen           int
+	maxLen           int
+}
+
+func defaultAdaptiveIDConfig() adaptiveIDConfig {
+	return adaptiveIDConfig{
+		maxCollisionProb: 0.25,
+		minLen:           3,
+		maxLen:           8,
+	}
+}
+
+func collisionProb(numIssues int, idLength int) float64 {
+	// P(collision) ≈ 1 - e^(-n²/2N), N = 36^len (base36)
+	const base = 36.0
+	N := math.Pow(base, float64(idLength))
+	exponent := -float64(numIssues*numIssues) / (2.0 * N)
+	return 1.0 - math.Exp(exponent)
+}
+
+func computeAdaptiveLen(numIssues int, cfg adaptiveIDConfig) int {
+	for l := cfg.minLen; l <= cfg.maxLen; l++ {
+		if collisionProb(numIssues, l) <= cfg.maxCollisionProb {
+			return l
+		}
+	}
+	return cfg.maxLen
+}
+
+func readAdaptiveConfig(ctx context.Context, db *sql.DB) adaptiveIDConfig {
+	cfg := defaultAdaptiveIDConfig()
+
+	// These keys mirror sqlite's adaptive ID config keys.
+	var s string
+	if err := db.QueryRowContext(ctx, "SELECT value FROM config WHERE `key` = ?", "max_collision_prob").Scan(&s); err == nil {
+		if v, err := strconvParseFloat(s); err == nil {
+			cfg.maxCollisionProb = v
+		}
+	}
+	if err := db.QueryRowContext(ctx, "SELECT value FROM config WHERE `key` = ?", "min_hash_length").Scan(&s); err == nil {
+		if v, err := strconvParseInt(s); err == nil && v > 0 {
+			cfg.minLen = v
+		}
+	}
+	if err := db.QueryRowContext(ctx, "SELECT value FROM config WHERE `key` = ?", "max_hash_length").Scan(&s); err == nil {
+		if v, err := strconvParseInt(s); err == nil && v > 0 {
+			cfg.maxLen = v
+		}
+	}
+
+	if cfg.minLen < 3 {
+		cfg.minLen = 3
+	}
+	if cfg.maxLen > 8 {
+		cfg.maxLen = 8
+	}
+	if cfg.maxLen < cfg.minLen {
+		cfg.maxLen = cfg.minLen
+	}
+	if cfg.maxCollisionProb <= 0 || cfg.maxCollisionProb > 1 {
+		cfg.maxCollisionProb = defaultAdaptiveIDConfig().maxCollisionProb
+	}
+	return cfg
+}
+
+func countTopLevelIssues(ctx context.Context, db *sql.DB, prefix string) (int, error) {
+	// Count top-level issues only: ids matching "{prefix}-..." with no '.' in the remainder.
+	var count int
+	err := db.QueryRowContext(ctx, `
+		SELECT COUNT(*)
+		FROM issues
+		WHERE id LIKE CONCAT(?, '-%')
+		  AND LOCATE('.', SUBSTRING(id, CHAR_LENGTH(?) + 2)) = 0
+	`, prefix, prefix).Scan(&count)
+	if err != nil {
+		return 0, err
+	}
+	return count, nil
+}
+
+func getAdaptiveIDLength(ctx context.Context, db *sql.DB, prefix string) int {
+	n, err := countTopLevelIssues(ctx, db, prefix)
+	if err != nil {
+		return 6
+	}
+	cfg := readAdaptiveConfig(ctx, db)
+	return computeAdaptiveLen(n, cfg)
+}
+
+func genHashID(prefix, title, description, creator string, ts time.Time, length, nonce int) string {
+	return idgen.GenerateHashID(prefix, title, description, creator, ts, length, nonce)
+}
+
+// tiny parsing helpers to avoid pulling extra deps here
+func strconvParseFloat(s string) (float64, error) {
+	// Accept both integer and float strings.
+	var f float64
+	_, err := fmt.Sscanf(strings.TrimSpace(s), "%f", &f)
+	return f, err
+}
+
+func strconvParseInt(s string) (int, error) {
+	var i int
+	_, err := fmt.Sscanf(strings.TrimSpace(s), "%d", &i)
+	return i, err
+}
+
+func (s *EmbeddedDoltStore) generateIssueID(ctx context.Context, db *sql.DB, prefix string, issue *types.Issue, actor string) (string, error) {
+	baseLen := getAdaptiveIDLength(ctx, db, prefix)
+	if baseLen < 3 {
+		baseLen = 3
+	}
+	if baseLen > 8 {
+		baseLen = 8
+	}
+	for length := baseLen; length <= 8; length++ {
+		for nonce := 0; nonce < 10; nonce++ {
+			candidate := genHashID(prefix, issue.Title, issue.Description, actor, issue.CreatedAt, length, nonce)
+			var count int
+			if err := db.QueryRowContext(ctx, "SELECT COUNT(*) FROM issues WHERE id = ?", candidate).Scan(&count); err != nil {
+				return "", fmt.Errorf("failed to check for ID collision: %w", err)
+			}
+			if count == 0 {
+				return candidate, nil
+			}
+		}
+	}
+	return "", fmt.Errorf("failed to generate unique ID after trying lengths %d-%d with 10 nonces each", baseLen, 8)
 }
 
 // Config configures the embedded-dolt backend (placeholder).
@@ -108,8 +276,162 @@ func New(ctx context.Context, cfg *Config) (*EmbeddedDoltStore, error) {
 // =============================================================================
 
 func (s *EmbeddedDoltStore) CreateIssue(ctx context.Context, issue *types.Issue, actor string) error {
-	_, _, _ = ctx, issue, actor
-	return unimplemented("CreateIssue")
+	if s == nil || s.exec == nil {
+		return fmt.Errorf("embedded-dolt store is not initialized")
+	}
+	if issue == nil {
+		return fmt.Errorf("issue is required")
+	}
+	if strings.TrimSpace(issue.Title) == "" {
+		return fmt.Errorf("title is required")
+	}
+
+	now := time.Now()
+	if issue.CreatedAt.IsZero() {
+		issue.CreatedAt = now
+	}
+	if issue.UpdatedAt.IsZero() {
+		issue.UpdatedAt = now
+	}
+
+	// Embedded schema requires these columns non-NULL.
+	if issue.Description == "" {
+		issue.Description = ""
+	}
+	if issue.Design == "" {
+		issue.Design = ""
+	}
+	if issue.AcceptanceCriteria == "" {
+		issue.AcceptanceCriteria = ""
+	}
+	if issue.Notes == "" {
+		issue.Notes = ""
+	}
+	if issue.Status == "" {
+		issue.Status = types.StatusOpen
+	}
+	if issue.IssueType == "" {
+		issue.IssueType = types.TypeTask
+	}
+
+	// Validate metadata JSON if present.
+	if len(issue.Metadata) > 0 && !json.Valid(issue.Metadata) {
+		return fmt.Errorf("metadata must be valid JSON")
+	}
+
+	if issue.ContentHash == "" {
+		issue.ContentHash = issue.ComputeContentHash()
+	}
+
+	// Do the insert (and ID generation) in a single short-lived connection.
+	err := s.exec.withDB(ctx, "beads", func(db *sql.DB) error {
+		// Require issue_prefix to be configured.
+		var cfgPrefix string
+		if err := db.QueryRowContext(ctx, "SELECT value FROM config WHERE `key` = ?", "issue_prefix").Scan(&cfgPrefix); err != nil {
+			if errors.Is(err, sql.ErrNoRows) || strings.TrimSpace(cfgPrefix) == "" {
+				return fmt.Errorf("database not initialized: issue_prefix config is missing (run 'bd init --prefix <prefix>' first)")
+			}
+			return fmt.Errorf("failed to read issue_prefix: %w", err)
+		}
+		cfgPrefix = strings.TrimSpace(cfgPrefix)
+
+		// Determine prefix to use for ID generation.
+		prefix := cfgPrefix
+		if strings.TrimSpace(issue.PrefixOverride) != "" {
+			prefix = strings.TrimSpace(issue.PrefixOverride)
+		} else if strings.TrimSpace(issue.IDPrefix) != "" {
+			prefix = cfgPrefix + "-" + strings.TrimSpace(issue.IDPrefix)
+		}
+
+		if issue.ID == "" {
+			id, err := s.generateIssueID(ctx, db, prefix, issue, actor)
+			if err != nil {
+				return err
+			}
+			issue.ID = id
+		}
+
+		// MySQL JSON columns accept text; empty means default JSON_OBJECT().
+		meta := issue.Metadata
+		if len(meta) == 0 {
+			meta = []byte(`{}`)
+		}
+
+		ephemeral := 0
+		if issue.Ephemeral {
+			ephemeral = 1
+		}
+		pinned := 0
+		if issue.Pinned {
+			pinned = 1
+		}
+		isTemplate := 0
+		if issue.IsTemplate {
+			isTemplate = 1
+		}
+		crystallizes := 0
+		if issue.Crystallizes {
+			crystallizes = 1
+		}
+
+		waitersJSON := "[]"
+		if len(issue.Waiters) > 0 {
+			if b, err := json.Marshal(issue.Waiters); err == nil {
+				waitersJSON = string(b)
+			}
+		}
+
+		_, err := db.ExecContext(ctx, `
+			INSERT INTO issues (
+				id, content_hash, title, description, design, acceptance_criteria, notes,
+				status, priority, issue_type, assignee, estimated_minutes,
+				created_at, created_by, owner, updated_at, closed_at, closed_by_session, external_ref, spec_id,
+				compaction_level, compacted_at, compacted_at_commit, original_size,
+				deleted_at, deleted_by, delete_reason, original_type,
+				sender, ephemeral, wisp_type, pinned, is_template, crystallizes,
+				mol_type, work_type, quality_score,
+				source_system, metadata, source_repo, close_reason,
+				event_kind, actor, target, payload,
+				await_type, await_id, timeout_ns, waiters,
+				hook_bead, role_bead, agent_state, last_activity, role_type, rig,
+				due_at, defer_until
+			) VALUES (
+				?, ?, ?, ?, ?, ?, ?,
+				?, ?, ?, ?, ?,
+				?, ?, ?, ?, ?, ?, ?, ?,
+				?, ?, ?, ?,
+				?, ?, ?, ?,
+				?, ?, ?, ?, ?, ?,
+				?, ?, ?,
+				?, CAST(? AS JSON), ?, ?,
+				?, ?, ?, ?,
+				?, ?, ?, ?,
+				?, ?, ?, ?, ?, ?,
+				?, ?
+			)
+		`,
+			issue.ID, issue.ContentHash, issue.Title, issue.Description, issue.Design, issue.AcceptanceCriteria, issue.Notes,
+			string(issue.Status), issue.Priority, string(issue.IssueType), nullIfEmpty(issue.Assignee), issue.EstimatedMinutes,
+			issue.CreatedAt, issue.CreatedBy, issue.Owner, issue.UpdatedAt, issue.ClosedAt, issue.ClosedBySession, issue.ExternalRef, issue.SpecID,
+			issue.CompactionLevel, issue.CompactedAt, issue.CompactedAtCommit, issue.OriginalSize,
+			issue.DeletedAt, issue.DeletedBy, issue.DeleteReason, issue.OriginalType,
+			issue.Sender, ephemeral, string(issue.WispType), pinned, isTemplate, crystallizes,
+			string(issue.MolType), issue.WorkType, issue.QualityScore,
+			issue.SourceSystem, string(meta), issue.SourceRepo, issue.CloseReason,
+			issue.EventKind, issue.Actor, issue.Target, issue.Payload,
+			issue.AwaitType, issue.AwaitID, int64(issue.Timeout), waitersJSON,
+			issue.HookBead, issue.RoleBead, string(issue.AgentState), issue.LastActivity, issue.RoleType, issue.Rig,
+			issue.DueAt, issue.DeferUntil,
+		)
+		if err != nil {
+			return fmt.Errorf("failed to insert issue: %w", err)
+		}
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+	return nil
 }
 
 func (s *EmbeddedDoltStore) CreateIssues(ctx context.Context, issues []*types.Issue, actor string) error {
@@ -162,8 +484,32 @@ func (s *EmbeddedDoltStore) SearchIssues(ctx context.Context, query string, filt
 // =============================================================================
 
 func (s *EmbeddedDoltStore) AddDependency(ctx context.Context, dep *types.Dependency, actor string) error {
-	_, _, _ = ctx, dep, actor
-	return unimplemented("AddDependency")
+	if s == nil || s.exec == nil {
+		return fmt.Errorf("embedded-dolt store is not initialized")
+	}
+	if dep == nil {
+		return fmt.Errorf("dependency is required")
+	}
+	if strings.TrimSpace(dep.IssueID) == "" || strings.TrimSpace(dep.DependsOnID) == "" {
+		return fmt.Errorf("dependency requires issue_id and depends_on_id")
+	}
+	depType := dep.Type
+	if depType == "" {
+		depType = types.DepBlocks
+	}
+	meta := strings.TrimSpace(dep.Metadata)
+	if meta == "" {
+		meta = "{}"
+	}
+	_, err := s.exec.ExecContext(ctx, "beads", `
+		INSERT INTO dependencies (issue_id, depends_on_id, type, created_by, metadata, thread_id)
+		VALUES (?, ?, ?, ?, CAST(? AS JSON), ?)
+		ON DUPLICATE KEY UPDATE type = VALUES(type), metadata = VALUES(metadata), thread_id = VALUES(thread_id)
+	`, dep.IssueID, dep.DependsOnID, string(depType), actor, meta, dep.ThreadID)
+	if err != nil {
+		return fmt.Errorf("failed to add dependency: %w", err)
+	}
+	return nil
 }
 
 func (s *EmbeddedDoltStore) RemoveDependency(ctx context.Context, issueID, dependsOnID string, actor string) error {
@@ -226,8 +572,23 @@ func (s *EmbeddedDoltStore) DetectCycles(ctx context.Context) ([][]*types.Issue,
 // =============================================================================
 
 func (s *EmbeddedDoltStore) AddLabel(ctx context.Context, issueID, label, actor string) error {
-	_, _, _, _ = ctx, issueID, label, actor
-	return unimplemented("AddLabel")
+	if s == nil || s.exec == nil {
+		return fmt.Errorf("embedded-dolt store is not initialized")
+	}
+	_ = actor // labels table doesn't track actor
+	issueID = strings.TrimSpace(issueID)
+	label = strings.TrimSpace(label)
+	if issueID == "" || label == "" {
+		return fmt.Errorf("issueID and label are required")
+	}
+	_, err := s.exec.ExecContext(ctx, "beads", `
+		INSERT INTO labels (issue_id, label) VALUES (?, ?)
+		ON DUPLICATE KEY UPDATE label = VALUES(label)
+	`, issueID, label)
+	if err != nil {
+		return fmt.Errorf("failed to add label: %w", err)
+	}
+	return nil
 }
 
 func (s *EmbeddedDoltStore) RemoveLabel(ctx context.Context, issueID, label, actor string) error {

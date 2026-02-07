@@ -305,6 +305,10 @@ var createCmd = &cobra.Command{
 			}
 			targetRig = prefixOverride
 		}
+		// Embedded-dolt is DB-only: disallow cross-rig creation.
+		if isEmbeddedDoltWorkspace() && targetRig != "" {
+			FatalErrorRespectJSON("unimplemented")
+		}
 		if targetRig != "" {
 			createInRig(cmd, targetRig, explicitID, title, description, issueType, priority, design, acceptance, notes, assignee, labels, externalRef, specID, wisp)
 			return
@@ -349,6 +353,10 @@ var createCmd = &cobra.Command{
 		if cmd.Flags().Changed("repo") {
 			// Explicit --repo flag overrides auto-routing
 			repoPath = repoOverride
+			// Embedded-dolt is DB-only: disallow repo routing.
+			if isEmbeddedDoltWorkspace() && repoPath != "." {
+				FatalErrorRespectJSON("unimplemented")
+			}
 		} else {
 			// Auto-routing based on user role
 			userRole, err := routing.DetectUserRole(".")
@@ -379,6 +387,10 @@ var createCmd = &cobra.Command{
 			}
 
 			repoPath = routing.DetermineTargetRepo(routingConfig, userRole, ".")
+			// Embedded-dolt is DB-only: disallow auto-routing to other repos.
+			if isEmbeddedDoltWorkspace() && repoPath != "." {
+				FatalErrorRespectJSON("unimplemented")
+			}
 		}
 
 		// Switch to target repo for multi-repo support (bd-6x6g)
@@ -744,6 +756,14 @@ var createCmd = &cobra.Command{
 
 		// Schedule auto-flush
 		markDirtyAndScheduleFlush()
+
+		// Embedded-dolt: every bd create ends with a Dolt commit.
+		if ed, ok := store.(*embeddeddolt.EmbeddedDoltStore); ok {
+			msg := fmt.Sprintf("create: %s", issue.ID)
+			if err := ed.DoltCommit(ctx, msg); err != nil {
+				FatalError("%v", err)
+			}
+		}
 
 		// If issue was routed to a different repo, flush its JSONL immediately
 		// so the issue appears in bd list when hydration is enabled (bd-fix-routing)

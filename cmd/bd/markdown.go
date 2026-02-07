@@ -14,6 +14,7 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/steveyegge/beads/internal/hooks"
 	"github.com/steveyegge/beads/internal/rpc"
+	"github.com/steveyegge/beads/internal/storage/embeddeddolt"
 	"github.com/steveyegge/beads/internal/types"
 	"github.com/steveyegge/beads/internal/ui"
 	"github.com/steveyegge/beads/internal/validation"
@@ -409,6 +410,17 @@ func createIssuesFromMarkdown(_ *cobra.Command, filepath string) {
 	// Schedule auto-flush
 	if len(createdIssues) > 0 {
 		markDirtyAndScheduleFlush()
+	}
+
+	// Embedded-dolt: every bd create (including --file) ends with a Dolt commit.
+	if len(createdIssues) > 0 {
+		if ed, ok := store.(*embeddeddolt.EmbeddedDoltStore); ok {
+			msg := fmt.Sprintf("create: %d issues (markdown)", len(createdIssues))
+			if err := ed.DoltCommit(ctx, msg); err != nil {
+				fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+				os.Exit(1)
+			}
+		}
 	}
 
 	// Report failures if any
