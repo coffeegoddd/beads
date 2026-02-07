@@ -256,6 +256,26 @@ var rootCmd = &cobra.Command{
 		// Initialize CommandContext to hold runtime state (replaces scattered globals)
 		initCommandContext()
 
+		// Hard-disable embedded-dolt mode globally (except for `bd init`).
+		// Per current policy request: embedded-dolt backend is present but not yet implemented.
+		//
+		// Note: `bd init` is allowed so users can create / re-init a workspace.
+		// Also allow `--help` (and `bd help`) so users can discover the command surface.
+		helpRequested := false
+		if cmd != nil {
+			if cmd.Name() == "help" {
+				helpRequested = true
+			} else if hf := cmd.Flags().Lookup("help"); hf != nil {
+				if help, _ := cmd.Flags().GetBool("help"); help {
+					helpRequested = true
+				}
+			}
+		}
+
+		if cmd != nil && cmd.Name() != "" && cmd.Name() != "init" && !helpRequested && isEmbeddedDoltWorkspace() {
+			FatalErrorRespectJSON("unimplemented")
+		}
+
 		// Reset per-command write tracking (used by Dolt auto-commit).
 		commandDidWrite.Store(false)
 		commandDidExplicitDoltCommit = false
