@@ -19,6 +19,11 @@ const GitignoreTemplate = `# SQLite databases
 *.db-wal
 *.db-shm
 
+# Embedded Dolt databases (repo-local)
+# These directories may contain large amounts of data and should never be committed.
+dolt/
+ed/
+
 # Daemon runtime files
 daemon.lock
 daemon.log
@@ -68,6 +73,8 @@ var requiredPatterns = []string{
 	"beads.left.meta.json",
 	"beads.right.meta.json",
 	"*.db?*",
+	"dolt/",
+	"ed/",
 	"redirect",
 	"last-touched",
 	".sync.lock",

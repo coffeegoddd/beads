@@ -122,12 +122,22 @@ func (c *Config) DatabasePath(beadsDir string) string {
 		return filepath.Join(beadsDir, "dolt")
 	}
 	if backend == BackendEmbeddedDolt {
-		// Embedded Dolt is directory-backed, like Dolt, but uses a separate on-disk location.
-		// This keeps it isolated from the server-mode dolt backend during development.
+		// Embedded Dolt uses a repo-local directory containing one or more dolt databases
+		// (via github.com/dolthub/driver). We use `.beads/dolt` as the multi-db directory.
+		//
+		// We store the chosen directory name in metadata.json "database" for stability.
 		if filepath.IsAbs(c.Database) {
 			return c.Database
 		}
-		return filepath.Join(beadsDir, "embedded-dolt")
+		dir := strings.TrimSpace(c.Database)
+		if dir == "" {
+			dir = "dolt"
+		}
+		// Back-compat for earlier placeholder value
+		if dir == "embedded-dolt" {
+			dir = "dolt"
+		}
+		return filepath.Join(beadsDir, dir)
 	}
 
 	// SQLite (default)

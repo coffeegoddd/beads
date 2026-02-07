@@ -17,6 +17,7 @@ import (
 	"github.com/steveyegge/beads/internal/configfile"
 	"github.com/steveyegge/beads/internal/git"
 	"github.com/steveyegge/beads/internal/storage"
+	"github.com/steveyegge/beads/internal/storage/embeddeddolt"
 	"github.com/steveyegge/beads/internal/storage/factory"
 	"github.com/steveyegge/beads/internal/storage/sqlite"
 	"github.com/steveyegge/beads/internal/syncbranch"
@@ -178,7 +179,8 @@ variable.`,
 			if backend == configfile.BackendDolt {
 				initDBPath = filepath.Join(beadsDirForInit, "dolt")
 			} else {
-				initDBPath = filepath.Join(beadsDirForInit, "embedded-dolt")
+				// Embedded Dolt always uses a dedicated repo-local directory.
+				initDBPath = filepath.Join(beadsDirForInit, "dolt")
 			}
 		} else if initDBPath == "" {
 			// SQLite backend: use computed beadsDirForInit
@@ -348,6 +350,17 @@ variable.`,
 		// currently returns "unimplemented" for all operations, so we skip DB metadata
 		// initialization and only write config files.
 		if backend == configfile.BackendEmbeddedDolt {
+			// Embedded Dolt (repo-local) initialization.
+			// Use `.beads/dolt` deterministically.
+			embeddedDirName := "dolt"
+			embeddedDirPath := filepath.Join(beadsDir, "dolt")
+
+			// Initialize/open the embedded dolt database "beads" inside embeddedDirPath.
+			// Even though the storage interface methods are stubbed, we want the dolt repo on disk.
+			if s, err := embeddeddolt.New(ctx, &embeddeddolt.Config{Path: embeddedDirPath}); err == nil {
+				_ = s.Close()
+			}
+
 			if useLocalBeads {
 				// Create or preserve metadata.json
 				existingCfg, err := configfile.Load(beadsDir)
@@ -359,9 +372,8 @@ variable.`,
 					cfg = configfile.DefaultConfig()
 				}
 				cfg.Backend = backend
-				if cfg.Database == "" || cfg.Database == beads.CanonicalDatabaseName {
-					cfg.Database = "embedded-dolt"
-				}
+				// Store the chosen embedded dolt directory name ("dolt") in metadata.json.
+				cfg.Database = embeddedDirName
 				if err := cfg.Save(beadsDir); err != nil && !quiet {
 					fmt.Fprintf(os.Stderr, "Warning: failed to create metadata.json: %v\n", err)
 				}
@@ -380,8 +392,8 @@ variable.`,
 			if !quiet {
 				fmt.Printf("\n%s bd initialized successfully!\n\n", ui.RenderPass("✓"))
 				fmt.Printf("  Backend: %s\n", ui.RenderAccent(backend))
-				fmt.Printf("  Database: %s\n", ui.RenderAccent(filepath.Join(beadsDir, "embedded-dolt")))
-				fmt.Printf("  Note: %s\n\n", ui.RenderAccent("embedded-dolt is a placeholder backend; operations are not implemented yet"))
+				fmt.Printf("  Database: %s\n", ui.RenderAccent(embeddedDirPath))
+				fmt.Printf("  Note: %s\n\n", ui.RenderAccent("embedded-dolt initializes a local dolt repo; storage operations are not implemented yet"))
 				fmt.Printf("Run %s to get started.\n\n", ui.RenderAccent("bd backend show"))
 			}
 			return

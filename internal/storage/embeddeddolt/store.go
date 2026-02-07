@@ -10,6 +10,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"time"
 
@@ -26,7 +27,9 @@ func unimplemented(method string) error {
 
 // Config configures the embedded-dolt backend (placeholder).
 type Config struct {
-	// Path is the directory where embedded Dolt data would live.
+	// Path is the repo-local directory containing one or more embedded Dolt databases.
+	//
+	// For beads, this should be `.beads/dolt`.
 	Path string
 
 	// ReadOnly indicates the store should open read-only (placeholder).
@@ -37,25 +40,51 @@ type Config struct {
 type EmbeddedDoltStore struct {
 	path     string
 	readOnly bool
+	exec *Executor
 }
 
 var _ storage.Storage = (*EmbeddedDoltStore)(nil)
 
-// New creates a new EmbeddedDoltStore.
-func New(_ context.Context, cfg *Config) (*EmbeddedDoltStore, error) {
+func validateAndAbsPath(cfg *Config) (string, error) {
 	if cfg == nil {
-		return nil, fmt.Errorf("embedded-dolt config is required")
+		return "", fmt.Errorf("embedded-dolt config is required")
 	}
 	if cfg.Path == "" {
-		return nil, fmt.Errorf("embedded-dolt path is required")
+		return "", fmt.Errorf("embedded-dolt path is required")
 	}
 	absPath, err := filepath.Abs(cfg.Path)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get absolute path: %w", err)
+		return "", fmt.Errorf("failed to get absolute path: %w", err)
 	}
+	return absPath, nil
+}
+
+// New initializes (if needed) and opens an embedded Dolt database named "beads" in cfg.Path.
+//
+// cfg.Path MUST be a directory whose subdirectories are Dolt databases (multi-db dir).
+func New(ctx context.Context, cfg *Config) (*EmbeddedDoltStore, error) {
+	absPath, err := validateAndAbsPath(cfg)
+	if err != nil {
+		return nil, err
+	}
+
+	// Ensure multi-db directory exists
+	if err := os.MkdirAll(absPath, 0o750); err != nil {
+		return nil, fmt.Errorf("failed to create embedded dolt directory: %w", err)
+	}
+
+	exec := NewExecutor(absPath)
+
+	// Bootstrap: ensure DB "beads" exists inside this multi-db directory.
+	// We intentionally do not hold a long-lived connection.
+	if _, err := exec.ExecContext(ctx, "", "CREATE DATABASE IF NOT EXISTS beads"); err != nil {
+		return nil, fmt.Errorf("failed to create embedded dolt database 'beads': %w", err)
+	}
+
 	return &EmbeddedDoltStore{
-		path:     absPath,
-		readOnly: cfg.ReadOnly,
+		path:      absPath,
+		readOnly:  cfg.ReadOnly,
+		exec:      exec,
 	}, nil
 }
 
@@ -444,7 +473,8 @@ func (s *EmbeddedDoltStore) RunInTransaction(ctx context.Context, fn func(tx sto
 // =============================================================================
 
 func (s *EmbeddedDoltStore) Close() error {
-	return unimplemented("Close")
+	// No-op: this store does not keep long-lived connections.
+	return nil
 }
 
 func (s *EmbeddedDoltStore) Path() string {
@@ -452,11 +482,13 @@ func (s *EmbeddedDoltStore) Path() string {
 }
 
 func (s *EmbeddedDoltStore) UnderlyingDB() *sql.DB {
+	// Intentionally nil: executor opens on demand.
 	return nil
 }
 
 func (s *EmbeddedDoltStore) UnderlyingConn(ctx context.Context) (*sql.Conn, error) {
 	_ = ctx
+	// Intentionally unsupported: executor is short-lived and does not expose conns.
 	return nil, unimplemented("UnderlyingConn")
 }
 
