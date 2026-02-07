@@ -37,6 +37,12 @@ Examples:
   bd daemon start --federation       # Enable federation mode (dolt sql-server)`,
 	PreRunE: guardDaemonStartForDolt,
 	Run: func(cmd *cobra.Command, args []string) {
+		// Embedded-dolt is DB-only and single-process: daemon is disabled.
+		if isEmbeddedDoltWorkspace() {
+			fmt.Fprintln(os.Stderr, "Error: daemon mode is disabled for embedded-dolt backend")
+			os.Exit(1)
+		}
+
 		interval, _ := cmd.Flags().GetDuration("interval")
 		autoCommit, _ := cmd.Flags().GetBool("auto-commit")
 		autoPush, _ := cmd.Flags().GetBool("auto-push")

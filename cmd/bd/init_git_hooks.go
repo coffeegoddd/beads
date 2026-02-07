@@ -247,9 +247,9 @@ if [ -z "$BEADS_DIR" ]; then
     exit 0
 fi
 
-# Skip for Dolt backend (uses its own sync mechanism, not JSONL)
+# Skip for Dolt backend (uses its own sync mechanism, not JSONL) and embedded-dolt (DB-only, no JSONL)
 if [ -f "$BEADS_DIR/metadata.json" ]; then
-    if grep -q '"backend"[[:space:]]*:[[:space:]]*"dolt"' "$BEADS_DIR/metadata.json" 2>/dev/null; then
+    if grep -Eq '"backend"[[:space:]]*:[[:space:]]*"(dolt|embedded-dolt)"' "$BEADS_DIR/metadata.json" 2>/dev/null; then
         exit 0
     fi
 fi
@@ -350,9 +350,9 @@ if [ -z "$BEADS_DIR" ]; then
     exit 0
 fi
 
-# Skip for Dolt backend (uses its own sync mechanism, not JSONL import)
+# Skip for Dolt backend (uses its own sync mechanism, not JSONL import) and embedded-dolt (DB-only, no JSONL)
 if [ -f "$BEADS_DIR/metadata.json" ]; then
-    if grep -q '"backend"[[:space:]]*:[[:space:]]*"dolt"' "$BEADS_DIR/metadata.json" 2>/dev/null; then
+    if grep -Eq '"backend"[[:space:]]*:[[:space:]]*"(dolt|embedded-dolt)"' "$BEADS_DIR/metadata.json" 2>/dev/null; then
         exit 0
     fi
 fi

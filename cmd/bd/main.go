@@ -619,6 +619,14 @@ var rootCmd = &cobra.Command{
 			FallbackReason:   FallbackNone,
 		}
 
+		// Single-process backends must never use daemon mode.
+		// Embedded-dolt is single-process and DB-only.
+		if singleProcessOnlyBackend() {
+			noDaemon = true
+			daemonStatus.FallbackReason = FallbackSingleProcessOnly
+			debug.Logf("single-process backend detected, using direct mode")
+		}
+
 		// Doctor should always run in direct mode. It's specifically used to diagnose and
 		// repair daemon/DB issues, so attempting to connect to (or auto-start) a daemon
 		// can add noise and timeouts.

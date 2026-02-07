@@ -209,6 +209,16 @@ Installed hooks:
   - post-checkout: Import JSONL after branch checkout
   - prepare-commit-msg: Add agent identity trailers (for orchestrator agents)`,
 	Run: func(cmd *cobra.Command, args []string) {
+		// Embedded-dolt is DB-only: git hooks are for JSONL workflows which are intentionally disabled.
+		if isEmbeddedDoltWorkspace() {
+			if jsonOutput {
+				outputJSON(map[string]string{"error": "bd hooks install is disabled for embedded-dolt backend"})
+			} else {
+				fmt.Fprintln(os.Stderr, "Error: bd hooks install is disabled for embedded-dolt backend")
+			}
+			os.Exit(1)
+		}
+
 		force, _ := cmd.Flags().GetBool("force")
 		shared, _ := cmd.Flags().GetBool("shared")
 		chain, _ := cmd.Flags().GetBool("chain")
@@ -551,6 +561,11 @@ func runPreCommitHook() int {
 		return exitCode
 	}
 
+	// Embedded-dolt is DB-only: no JSONL workflows, so hooks are no-ops.
+	if isEmbeddedDoltWorkspace() {
+		return 0
+	}
+
 	// Check if we're in a bd workspace
 	if _, err := os.Stat(".beads"); os.IsNotExist(err) {
 		return 0 // Not a bd workspace, nothing to do
@@ -627,6 +642,11 @@ func runPostMergeHook() int {
 		return exitCode
 	}
 
+	// Embedded-dolt is DB-only: no JSONL workflows, so hooks are no-ops.
+	if isEmbeddedDoltWorkspace() {
+		return 0
+	}
+
 	// Skip during rebase
 	if isRebaseInProgress() {
 		return 0
@@ -667,6 +687,11 @@ func runPrePushHook(args []string) int {
 	// Run chained hook first (if exists)
 	if exitCode := runChainedHook("pre-push", args); exitCode != 0 {
 		return exitCode
+	}
+
+	// Embedded-dolt is DB-only: no JSONL workflows, so hooks are no-ops.
+	if isEmbeddedDoltWorkspace() {
+		return 0
 	}
 
 	// Check if we're in a bd workspace
@@ -772,6 +797,11 @@ func runPostCheckoutHook(args []string) int {
 		return exitCode
 	}
 
+	// Embedded-dolt is DB-only: no JSONL workflows, so hooks are no-ops.
+	if isEmbeddedDoltWorkspace() {
+		return 0
+	}
+
 	// Only run on branch checkouts (flag=1)
 	if len(args) >= 3 && args[2] != "1" {
 		return 0
@@ -840,6 +870,11 @@ func runPrepareCommitMsgHook(args []string) int {
 	// Run chained hook first (if exists)
 	if exitCode := runChainedHook("prepare-commit-msg", args); exitCode != 0 {
 		return exitCode
+	}
+
+	// Embedded-dolt is DB-only: git hooks are disabled (no-op).
+	if isEmbeddedDoltWorkspace() {
+		return 0
 	}
 
 	if len(args) < 1 {
@@ -1114,6 +1149,8 @@ installed bd version - upgrading bd automatically updates hook behavior.`,
 		hookName := args[0]
 		hookArgs := args[1:]
 
+		// Embedded-dolt is DB-only: all bd hook logic is disabled.
+		// Important: still allow chained hooks to run inside run*Hook() implementations.
 		var exitCode int
 		switch hookName {
 		case "pre-commit":

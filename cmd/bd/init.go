@@ -111,6 +111,13 @@ variable.`,
 			skipMergeDriver = true
 		}
 
+		// Embedded-dolt is DB-only: hard-disable git hooks and merge driver setup.
+		// Hooks exist to keep JSONL synced; embedded-dolt intentionally has no JSONL workflows.
+		if backend == configfile.BackendEmbeddedDolt {
+			skipHooks = true
+			skipMergeDriver = true
+		}
+
 		// Check BEADS_DB environment variable if --db flag not set
 		// (PersistentPreRun doesn't run for init command)
 		if dbPath == "" {

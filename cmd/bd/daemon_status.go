@@ -53,6 +53,12 @@ Examples:
   bd daemon status         # Current workspace daemon
   bd daemon status --all   # All running daemons`,
 	Run: func(cmd *cobra.Command, args []string) {
+		// Embedded-dolt is DB-only and single-process: daemon is disabled.
+		if isEmbeddedDoltWorkspace() {
+			fmt.Fprintln(os.Stderr, "Error: daemon mode is disabled for embedded-dolt backend")
+			os.Exit(1)
+		}
+
 		showAll, _ := cmd.Flags().GetBool("all")
 
 		if showAll {

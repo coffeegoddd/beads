@@ -80,6 +80,11 @@ Subcommands:
   logs    - View daemon logs
   killall - Stop all running daemons
   restart - Restart a specific daemon (not yet implemented)`,
+	PersistentPreRunE: guardNoDaemonForEmbeddedDolt,
+	Run: func(cmd *cobra.Command, args []string) {
+		_ = cmd.Help()
+		_ = args
+	},
 }
 var daemonsListCmd = &cobra.Command{
 	Use:   "list",

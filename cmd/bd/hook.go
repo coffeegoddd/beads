@@ -346,6 +346,14 @@ func hookPreCommit() int {
 		}
 	}
 
+	// Embedded-dolt is DB-only: git hook logic is disabled (no JSONL workflows).
+	if factory.GetBackendFromConfig(beadsDir) == configfile.BackendEmbeddedDolt {
+		if cfg.ChainStrategy == ChainAfter {
+			return runChainedHookWithConfig("pre-commit", nil, cfg)
+		}
+		return 0
+	}
+
 	// Check if sync-branch is configured (changes go to separate branch)
 	if hookGetSyncBranch() != "" {
 		if cfg.ChainStrategy == ChainAfter {
@@ -572,6 +580,14 @@ func hookPostMerge(args []string) int {
 		}
 	}
 
+	// Embedded-dolt is DB-only: git hook logic is disabled (no JSONL workflows).
+	if factory.GetBackendFromConfig(beadsDir) == configfile.BackendEmbeddedDolt {
+		if cfg.ChainStrategy == ChainAfter {
+			return runChainedHookWithConfig("post-merge", args, cfg)
+		}
+		return 0
+	}
+
 	// Skip during rebase
 	if isRebaseInProgress() {
 		if cfg.ChainStrategy == ChainAfter {
@@ -740,6 +756,14 @@ func hookPostCheckout(args []string) int {
 		if exitCode := runChainedHookWithConfig("post-checkout", args, cfg); exitCode != 0 {
 			return exitCode
 		}
+	}
+
+	// Embedded-dolt is DB-only: git hook logic is disabled (no JSONL workflows).
+	if factory.GetBackendFromConfig(beadsDir) == configfile.BackendEmbeddedDolt {
+		if cfg.ChainStrategy == ChainAfter {
+			return runChainedHookWithConfig("post-checkout", args, cfg)
+		}
+		return 0
 	}
 
 	// Skip during rebase
