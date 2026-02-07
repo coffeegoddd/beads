@@ -694,7 +694,8 @@ variable.`,
 
 		// Add "landing the plane" instructions to AGENTS.md and @AGENTS.md
 		// Skip in stealth mode (user wants invisible setup) and quiet mode (suppress all output)
-		if !stealth {
+		// Embedded-dolt is DB-only and should not modify repo documentation files.
+		if !stealth && backend != configfile.BackendEmbeddedDolt {
 			addLandingThePlaneInstructions(!quiet)
 		}
 

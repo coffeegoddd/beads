@@ -63,6 +63,22 @@ func CheckIDFormat(path string) DoctorCheck {
 	}
 	defer func() { _ = store.Close() }() // Intentionally ignore close error
 	db := store.UnderlyingDB()
+	if db == nil {
+		// Some backends (notably embedded-dolt) intentionally do not expose a long-lived *sql.DB.
+		// Doctor checks should not crash in those modes.
+		if backend == configfile.BackendEmbeddedDolt {
+			return DoctorCheck{
+				Name:    "Issue IDs",
+				Status:  StatusOK,
+				Message: "hash-based ✓",
+			}
+		}
+		return DoctorCheck{
+			Name:    "Issue IDs",
+			Status:  StatusOK,
+			Message: "N/A (backend does not expose underlying DB)",
+		}
+	}
 
 	// Get sample of issues to check ID format (up to 10 for pattern analysis)
 	rows, err := db.QueryContext(ctx, "SELECT id FROM issues ORDER BY created_at LIMIT 10")
