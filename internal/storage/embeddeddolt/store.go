@@ -12,9 +12,11 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/steveyegge/beads/internal/storage"
+	"github.com/steveyegge/beads/internal/storage/dolt"
 	"github.com/steveyegge/beads/internal/types"
 )
 
@@ -79,6 +81,20 @@ func New(ctx context.Context, cfg *Config) (*EmbeddedDoltStore, error) {
 	// We intentionally do not hold a long-lived connection.
 	if _, err := exec.ExecContext(ctx, "", "CREATE DATABASE IF NOT EXISTS beads"); err != nil {
 		return nil, fmt.Errorf("failed to create embedded dolt database 'beads': %w", err)
+	}
+
+	// Initialize schema in the "beads" database.
+	if err := exec.withDB(ctx, "beads", func(db *sql.DB) error {
+		return dolt.InitSchemaOnDB(ctx, db)
+	}); err != nil {
+		return nil, fmt.Errorf("failed to initialize embedded dolt schema: %w", err)
+	}
+
+	// Commit schema changes (best-effort: ignore "nothing to commit").
+	if _, err := exec.ExecContext(ctx, "beads", "CALL DOLT_COMMIT('-Am', 'schema: init')"); err != nil {
+		if !strings.Contains(strings.ToLower(err.Error()), "nothing to commit") {
+			return nil, fmt.Errorf("failed to dolt_commit schema: %w", err)
+		}
 	}
 
 	return &EmbeddedDoltStore{

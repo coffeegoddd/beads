@@ -262,8 +262,11 @@ func openServerConnection(ctx context.Context, cfg *Config) (*sql.DB, string, er
 	return db, connStr, nil
 }
 
-// initSchema creates all tables if they don't exist
-func initSchemaOnDB(ctx context.Context, db *sql.DB) error {
+// InitSchemaOnDB creates all tables, views, and default config rows if they don't exist.
+//
+// This is used by the Dolt server-mode backend and can also be reused by the embedded-dolt
+// backend to ensure identical schema initialization.
+func InitSchemaOnDB(ctx context.Context, db *sql.DB) error {
 	// Execute schema creation - split into individual statements
 	// because MySQL/Dolt doesn't support multiple statements in one Exec
 	for _, stmt := range splitStatements(schema) {
@@ -338,7 +341,7 @@ func initSchemaOnDB(ctx context.Context, db *sql.DB) error {
 }
 
 func (s *DoltStore) initSchema(ctx context.Context) error {
-	return initSchemaOnDB(ctx, s.db)
+	return InitSchemaOnDB(ctx, s.db)
 }
 
 // splitStatements splits a SQL script into individual statements
