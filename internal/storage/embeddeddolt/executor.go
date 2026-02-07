@@ -7,7 +7,9 @@ import (
 	"net/url"
 	"path/filepath"
 	"strings"
+	"time"
 
+	"github.com/cenkalti/backoff/v4"
 	doltembed "github.com/dolthub/driver"
 )
 
@@ -42,10 +44,30 @@ func buildDSN(dir string, database string) string {
 // This ensures EmbeddedDoltStore does not hold long-lived process-global state.
 type Executor struct {
 	multiDir string // directory containing one or more dolt databases (subdirs)
+	// backoffFactory returns a fresh BackOff instance per call.
+	// BackOff implementations are stateful; do not reuse the same instance concurrently.
+	backoffFactory func() backoff.BackOff
 }
 
 func NewExecutor(multiDir string) *Executor {
-	return &Executor{multiDir: multiDir}
+	return &Executor{
+		multiDir: multiDir,
+		// Default: bounded exponential retry for lock contention / transient open errors.
+		backoffFactory: func() backoff.BackOff {
+			bo := backoff.NewExponentialBackOff()
+			bo.MaxElapsedTime = 30 * time.Second
+			return bo
+		},
+	}
+}
+
+// SetBackoffFactory overrides the backoff factory used for connector opens.
+// Set to nil to disable retries.
+func (e *Executor) SetBackoffFactory(factory func() backoff.BackOff) {
+	if e == nil {
+		return
+	}
+	e.backoffFactory = factory
 }
 
 // withDB opens a short-lived *sql.DB for the given database, runs fn, then closes
@@ -65,6 +87,9 @@ func (e *Executor) withDB(ctx context.Context, database string, fn func(db *sql.
 	}
 	// Ensure database selection matches the callsite, even if DSN was built without it.
 	cfg.Database = database
+	if e.backoffFactory != nil {
+		cfg.BackOff = e.backoffFactory()
+	}
 
 	connector, err := doltembed.NewConnector(cfg)
 	if err != nil {
