@@ -272,7 +272,7 @@ var rootCmd = &cobra.Command{
 			}
 		}
 
-		allowedEmbedded := cmd != nil && (cmd.Name() == "init" || cmd.Name() == "create")
+		allowedEmbedded := cmd != nil && (cmd.Name() == "init" || cmd.Name() == "create" || cmd.Name() == "list")
 		if cmd != nil && cmd.Name() != "" && !allowedEmbedded && !helpRequested && isEmbeddedDoltWorkspace() {
 			FatalErrorRespectJSON("unimplemented")
 		}

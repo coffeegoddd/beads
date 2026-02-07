@@ -36,6 +36,47 @@ func nullIfEmpty(s string) any {
 	return s
 }
 
+func parseTimeString(s string) time.Time {
+	if s == "" {
+		return time.Time{}
+	}
+	for _, layout := range []string{time.RFC3339Nano, time.RFC3339, "2006-01-02 15:04:05"} {
+		if t, err := time.Parse(layout, s); err == nil {
+			return t
+		}
+	}
+	return time.Time{}
+}
+
+func parseNullableTimeString(ns sql.NullString) *time.Time {
+	if !ns.Valid || ns.String == "" {
+		return nil
+	}
+	for _, layout := range []string{time.RFC3339Nano, time.RFC3339, "2006-01-02 15:04:05"} {
+		if t, err := time.Parse(layout, ns.String); err == nil {
+			return &t
+		}
+	}
+	return nil
+}
+
+func parseJSONStringArray(s string) []string {
+	if s == "" {
+		return nil
+	}
+	var out []string
+	if err := json.Unmarshal([]byte(s), &out); err != nil {
+		return nil
+	}
+	return out
+}
+
+func globToLike(pattern string) string {
+	p := strings.ReplaceAll(pattern, "*", "%")
+	p = strings.ReplaceAll(p, "?", "_")
+	return p
+}
+
 // DoltCommit creates a Dolt commit in the embedded database.
 // This is an embedded-dolt-only helper (not part of storage.Storage).
 //
@@ -445,8 +486,39 @@ func (s *EmbeddedDoltStore) CreateIssuesWithFullOptions(ctx context.Context, iss
 }
 
 func (s *EmbeddedDoltStore) GetIssue(ctx context.Context, id string) (*types.Issue, error) {
-	_, _ = ctx, id
-	return nil, unimplemented("GetIssue")
+	if s == nil || s.exec == nil {
+		return nil, fmt.Errorf("embedded-dolt store is not initialized")
+	}
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return nil, fmt.Errorf("id is required")
+	}
+
+	var issue *types.Issue
+	err := s.exec.withDB(ctx, "beads", func(db *sql.DB) error {
+		issues, err := s.getIssuesByIDs(ctx, db, []string{id})
+		if err != nil {
+			return err
+		}
+		if len(issues) == 0 {
+			issue = nil
+			return nil
+		}
+		issue = issues[0]
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	if issue == nil {
+		return nil, nil
+	}
+
+	labels, err := s.GetLabels(ctx, issue.ID)
+	if err == nil {
+		issue.Labels = labels
+	}
+	return issue, nil
 }
 
 func (s *EmbeddedDoltStore) GetIssueByExternalRef(ctx context.Context, externalRef string) (*types.Issue, error) {
@@ -475,8 +547,274 @@ func (s *EmbeddedDoltStore) DeleteIssue(ctx context.Context, id string) error {
 }
 
 func (s *EmbeddedDoltStore) SearchIssues(ctx context.Context, query string, filter types.IssueFilter) ([]*types.Issue, error) {
-	_, _, _ = ctx, query, filter
-	return nil, unimplemented("SearchIssues")
+	if s == nil || s.exec == nil {
+		return nil, fmt.Errorf("embedded-dolt store is not initialized")
+	}
+
+	var out []*types.Issue
+	err := s.exec.withDB(ctx, "beads", func(db *sql.DB) error {
+		whereClauses := []string{}
+		args := []any{}
+
+		if query != "" {
+			whereClauses = append(whereClauses, "(title LIKE ? OR description LIKE ? OR id LIKE ?)")
+			p := "%" + query + "%"
+			args = append(args, p, p, p)
+		}
+
+		if filter.TitleSearch != "" {
+			whereClauses = append(whereClauses, "title LIKE ?")
+			args = append(args, "%"+filter.TitleSearch+"%")
+		}
+		if filter.TitleContains != "" {
+			whereClauses = append(whereClauses, "title LIKE ?")
+			args = append(args, "%"+filter.TitleContains+"%")
+		}
+		if filter.DescriptionContains != "" {
+			whereClauses = append(whereClauses, "description LIKE ?")
+			args = append(args, "%"+filter.DescriptionContains+"%")
+		}
+		if filter.NotesContains != "" {
+			whereClauses = append(whereClauses, "notes LIKE ?")
+			args = append(args, "%"+filter.NotesContains+"%")
+		}
+
+		if filter.Status != nil {
+			whereClauses = append(whereClauses, "status = ?")
+			args = append(args, string(*filter.Status))
+		} else if !filter.IncludeTombstones {
+			whereClauses = append(whereClauses, "status != ?")
+			args = append(args, string(types.StatusTombstone))
+		}
+
+		if len(filter.ExcludeStatus) > 0 {
+			ph := make([]string, 0, len(filter.ExcludeStatus))
+			for _, st := range filter.ExcludeStatus {
+				ph = append(ph, "?")
+				args = append(args, string(st))
+			}
+			whereClauses = append(whereClauses, fmt.Sprintf("status NOT IN (%s)", strings.Join(ph, ",")))
+		}
+
+		if len(filter.ExcludeTypes) > 0 {
+			ph := make([]string, 0, len(filter.ExcludeTypes))
+			for _, t := range filter.ExcludeTypes {
+				ph = append(ph, "?")
+				args = append(args, string(t))
+			}
+			whereClauses = append(whereClauses, fmt.Sprintf("id IN (SELECT id FROM issues WHERE issue_type NOT IN (%s))", strings.Join(ph, ",")))
+		}
+
+		if filter.Priority != nil {
+			whereClauses = append(whereClauses, "priority = ?")
+			args = append(args, *filter.Priority)
+		}
+		if filter.PriorityMin != nil {
+			whereClauses = append(whereClauses, "priority >= ?")
+			args = append(args, *filter.PriorityMin)
+		}
+		if filter.PriorityMax != nil {
+			whereClauses = append(whereClauses, "priority <= ?")
+			args = append(args, *filter.PriorityMax)
+		}
+
+		if filter.IssueType != nil {
+			whereClauses = append(whereClauses, "issue_type = ?")
+			args = append(args, string(*filter.IssueType))
+		}
+		if filter.Assignee != nil {
+			whereClauses = append(whereClauses, "assignee = ?")
+			args = append(args, *filter.Assignee)
+		}
+
+		// Date ranges
+		if filter.CreatedAfter != nil {
+			whereClauses = append(whereClauses, "created_at > ?")
+			args = append(args, filter.CreatedAfter.UTC().Format("2006-01-02 15:04:05"))
+		}
+		if filter.CreatedBefore != nil {
+			whereClauses = append(whereClauses, "created_at < ?")
+			args = append(args, filter.CreatedBefore.UTC().Format("2006-01-02 15:04:05"))
+		}
+		if filter.UpdatedAfter != nil {
+			whereClauses = append(whereClauses, "updated_at > ?")
+			args = append(args, filter.UpdatedAfter.UTC().Format("2006-01-02 15:04:05"))
+		}
+		if filter.UpdatedBefore != nil {
+			whereClauses = append(whereClauses, "updated_at < ?")
+			args = append(args, filter.UpdatedBefore.UTC().Format("2006-01-02 15:04:05"))
+		}
+		if filter.ClosedAfter != nil {
+			whereClauses = append(whereClauses, "closed_at > ?")
+			args = append(args, filter.ClosedAfter.UTC().Format("2006-01-02 15:04:05"))
+		}
+		if filter.ClosedBefore != nil {
+			whereClauses = append(whereClauses, "closed_at < ?")
+			args = append(args, filter.ClosedBefore.UTC().Format("2006-01-02 15:04:05"))
+		}
+
+		// Empty/null checks
+		if filter.EmptyDescription {
+			whereClauses = append(whereClauses, "(description IS NULL OR description = '')")
+		}
+		if filter.NoAssignee {
+			whereClauses = append(whereClauses, "(assignee IS NULL OR assignee = '')")
+		}
+		if filter.NoLabels {
+			whereClauses = append(whereClauses, "id NOT IN (SELECT DISTINCT issue_id FROM labels)")
+		}
+
+		// Label filtering (AND)
+		for _, l := range filter.Labels {
+			whereClauses = append(whereClauses, "id IN (SELECT issue_id FROM labels WHERE label = ?)")
+			args = append(args, l)
+		}
+		// Label filtering (OR)
+		if len(filter.LabelsAny) > 0 {
+			ph := make([]string, 0, len(filter.LabelsAny))
+			for _, l := range filter.LabelsAny {
+				ph = append(ph, "?")
+				args = append(args, l)
+			}
+			whereClauses = append(whereClauses, fmt.Sprintf("id IN (SELECT issue_id FROM labels WHERE label IN (%s))", strings.Join(ph, ", ")))
+		}
+		if filter.LabelPattern != "" {
+			whereClauses = append(whereClauses, "id IN (SELECT issue_id FROM labels WHERE label LIKE ?)")
+			args = append(args, globToLike(filter.LabelPattern))
+		}
+		if filter.LabelRegex != "" {
+			whereClauses = append(whereClauses, "id IN (SELECT issue_id FROM labels WHERE label REGEXP ?)")
+			args = append(args, filter.LabelRegex)
+		}
+
+		// ID filtering
+		if len(filter.IDs) > 0 {
+			ph := make([]string, 0, len(filter.IDs))
+			for _, id := range filter.IDs {
+				ph = append(ph, "?")
+				args = append(args, id)
+			}
+			whereClauses = append(whereClauses, fmt.Sprintf("id IN (%s)", strings.Join(ph, ", ")))
+		}
+		if filter.IDPrefix != "" {
+			whereClauses = append(whereClauses, "id LIKE ?")
+			args = append(args, filter.IDPrefix+"%")
+		}
+		if filter.SpecIDPrefix != "" {
+			whereClauses = append(whereClauses, "spec_id LIKE ?")
+			args = append(args, filter.SpecIDPrefix+"%")
+		}
+
+		// Wisp/pinned/template
+		if filter.Ephemeral != nil {
+			if *filter.Ephemeral {
+				whereClauses = append(whereClauses, "ephemeral = 1")
+			} else {
+				whereClauses = append(whereClauses, "(ephemeral = 0 OR ephemeral IS NULL)")
+			}
+		}
+		if filter.Pinned != nil {
+			if *filter.Pinned {
+				whereClauses = append(whereClauses, "pinned = 1")
+			} else {
+				whereClauses = append(whereClauses, "(pinned = 0 OR pinned IS NULL)")
+			}
+		}
+		if filter.IsTemplate != nil {
+			if *filter.IsTemplate {
+				whereClauses = append(whereClauses, "is_template = 1")
+			} else {
+				whereClauses = append(whereClauses, "(is_template = 0 OR is_template IS NULL)")
+			}
+		}
+
+		// Parent filtering
+		if filter.ParentID != nil {
+			whereClauses = append(whereClauses, "id IN (SELECT issue_id FROM dependencies WHERE type = 'parent-child' AND depends_on_id = ?)")
+			args = append(args, *filter.ParentID)
+		}
+
+		if filter.MolType != nil {
+			whereClauses = append(whereClauses, "mol_type = ?")
+			args = append(args, string(*filter.MolType))
+		}
+		if filter.WispType != nil {
+			whereClauses = append(whereClauses, "wisp_type = ?")
+			args = append(args, string(*filter.WispType))
+		}
+
+		// Time scheduling
+		if filter.Deferred {
+			whereClauses = append(whereClauses, "defer_until IS NOT NULL")
+		}
+		if filter.DeferAfter != nil {
+			whereClauses = append(whereClauses, "defer_until > ?")
+			args = append(args, filter.DeferAfter.UTC().Format("2006-01-02 15:04:05"))
+		}
+		if filter.DeferBefore != nil {
+			whereClauses = append(whereClauses, "defer_until < ?")
+			args = append(args, filter.DeferBefore.UTC().Format("2006-01-02 15:04:05"))
+		}
+		if filter.DueAfter != nil {
+			whereClauses = append(whereClauses, "due_at > ?")
+			args = append(args, filter.DueAfter.UTC().Format("2006-01-02 15:04:05"))
+		}
+		if filter.DueBefore != nil {
+			whereClauses = append(whereClauses, "due_at < ?")
+			args = append(args, filter.DueBefore.UTC().Format("2006-01-02 15:04:05"))
+		}
+		if filter.Overdue {
+			whereClauses = append(whereClauses, "due_at IS NOT NULL AND due_at < ? AND status != ?")
+			args = append(args, time.Now().UTC().Format("2006-01-02 15:04:05"), string(types.StatusClosed))
+		}
+
+		whereSQL := ""
+		if len(whereClauses) > 0 {
+			whereSQL = "WHERE " + strings.Join(whereClauses, " AND ")
+		}
+		limitSQL := ""
+		if filter.Limit > 0 {
+			limitSQL = fmt.Sprintf(" LIMIT %d", filter.Limit)
+		}
+
+		// nolint:gosec // whereSQL built from safe predicates with ?, limitSQL is int
+		q := fmt.Sprintf(`
+			SELECT id FROM issues
+			%s
+			ORDER BY priority ASC, created_at DESC
+			%s
+		`, whereSQL, limitSQL)
+
+		rows, err := db.QueryContext(ctx, q, args...)
+		if err != nil {
+			return fmt.Errorf("failed to search issues: %w", err)
+		}
+		var ids []string
+		for rows.Next() {
+			var id string
+			if err := rows.Scan(&id); err != nil {
+				_ = rows.Close()
+				return fmt.Errorf("failed to scan issue id: %w", err)
+			}
+			ids = append(ids, id)
+		}
+		if err := rows.Err(); err != nil {
+			_ = rows.Close()
+			return err
+		}
+		_ = rows.Close()
+
+		issues, err := s.getIssuesByIDs(ctx, db, ids)
+		if err != nil {
+			return err
+		}
+		out = issues
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 // =============================================================================
@@ -543,18 +881,161 @@ func (s *EmbeddedDoltStore) GetDependencyRecords(ctx context.Context, issueID st
 }
 
 func (s *EmbeddedDoltStore) GetAllDependencyRecords(ctx context.Context) (map[string][]*types.Dependency, error) {
-	_ = ctx
-	return nil, unimplemented("GetAllDependencyRecords")
+	if s == nil || s.exec == nil {
+		return nil, fmt.Errorf("embedded-dolt store is not initialized")
+	}
+
+	out := map[string][]*types.Dependency{}
+	err := s.exec.withDB(ctx, "beads", func(db *sql.DB) error {
+		rows, err := db.QueryContext(ctx, `
+			SELECT issue_id, depends_on_id, type, CAST(metadata AS CHAR), thread_id
+			FROM dependencies
+		`)
+		if err != nil {
+			return fmt.Errorf("failed to query dependencies: %w", err)
+		}
+		defer rows.Close()
+
+		for rows.Next() {
+			var issueID, dependsOnID, typ, meta, threadID sql.NullString
+			if err := rows.Scan(&issueID, &dependsOnID, &typ, &meta, &threadID); err != nil {
+				return err
+			}
+			d := &types.Dependency{
+				IssueID:     issueID.String,
+				DependsOnID: dependsOnID.String,
+				Type:        types.DependencyType(typ.String),
+				Metadata:    meta.String,
+				ThreadID:    threadID.String,
+			}
+			out[d.IssueID] = append(out[d.IssueID], d)
+		}
+		return rows.Err()
+	})
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 func (s *EmbeddedDoltStore) GetDependencyRecordsForIssues(ctx context.Context, issueIDs []string) (map[string][]*types.Dependency, error) {
-	_, _ = ctx, issueIDs
-	return nil, unimplemented("GetDependencyRecordsForIssues")
+	if s == nil || s.exec == nil {
+		return nil, fmt.Errorf("embedded-dolt store is not initialized")
+	}
+
+	out := map[string][]*types.Dependency{}
+	if len(issueIDs) == 0 {
+		return out, nil
+	}
+
+	err := s.exec.withDB(ctx, "beads", func(db *sql.DB) error {
+		ph := make([]string, len(issueIDs))
+		args := make([]any, len(issueIDs))
+		for i, id := range issueIDs {
+			ph[i] = "?"
+			args[i] = id
+		}
+		// nolint:gosec // placeholders only
+		q := fmt.Sprintf(`
+			SELECT issue_id, depends_on_id, type, CAST(metadata AS CHAR), thread_id
+			FROM dependencies
+			WHERE issue_id IN (%s)
+		`, strings.Join(ph, ","))
+		rows, err := db.QueryContext(ctx, q, args...)
+		if err != nil {
+			return fmt.Errorf("failed to query dependencies: %w", err)
+		}
+		defer rows.Close()
+
+		for rows.Next() {
+			var issueID, dependsOnID, typ, meta, threadID sql.NullString
+			if err := rows.Scan(&issueID, &dependsOnID, &typ, &meta, &threadID); err != nil {
+				return err
+			}
+			d := &types.Dependency{
+				IssueID:     issueID.String,
+				DependsOnID: dependsOnID.String,
+				Type:        types.DependencyType(typ.String),
+				Metadata:    meta.String,
+				ThreadID:    threadID.String,
+			}
+			out[d.IssueID] = append(out[d.IssueID], d)
+		}
+		return rows.Err()
+	})
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 func (s *EmbeddedDoltStore) GetDependencyCounts(ctx context.Context, issueIDs []string) (map[string]*types.DependencyCounts, error) {
-	_, _ = ctx, issueIDs
-	return nil, unimplemented("GetDependencyCounts")
+	if s == nil || s.exec == nil {
+		return nil, fmt.Errorf("embedded-dolt store is not initialized")
+	}
+
+	out := map[string]*types.DependencyCounts{}
+	if len(issueIDs) == 0 {
+		return out, nil
+	}
+
+	err := s.exec.withDB(ctx, "beads", func(db *sql.DB) error {
+		ph := make([]string, len(issueIDs))
+		args := make([]any, len(issueIDs))
+		for i, id := range issueIDs {
+			ph[i] = "?"
+			args[i] = id
+		}
+		in := strings.Join(ph, ",")
+
+		// Outgoing dependencies
+		// nolint:gosec // placeholders only
+		q1 := fmt.Sprintf(`SELECT issue_id, COUNT(*) FROM dependencies WHERE issue_id IN (%s) GROUP BY issue_id`, in)
+		rows, err := db.QueryContext(ctx, q1, args...)
+		if err != nil {
+			return err
+		}
+		for rows.Next() {
+			var id string
+			var c int
+			if err := rows.Scan(&id, &c); err != nil {
+				_ = rows.Close()
+				return err
+			}
+			if out[id] == nil {
+				out[id] = &types.DependencyCounts{}
+			}
+			out[id].DependencyCount = c
+		}
+		_ = rows.Close()
+
+		// Incoming dependencies (dependents)
+		// nolint:gosec // placeholders only
+		q2 := fmt.Sprintf(`SELECT depends_on_id, COUNT(*) FROM dependencies WHERE depends_on_id IN (%s) GROUP BY depends_on_id`, in)
+		rows2, err := db.QueryContext(ctx, q2, args...)
+		if err != nil {
+			return err
+		}
+		for rows2.Next() {
+			var id string
+			var c int
+			if err := rows2.Scan(&id, &c); err != nil {
+				_ = rows2.Close()
+				return err
+			}
+			if out[id] == nil {
+				out[id] = &types.DependencyCounts{}
+			}
+			out[id].DependentCount = c
+		}
+		_ = rows2.Close()
+
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 func (s *EmbeddedDoltStore) GetDependencyTree(ctx context.Context, issueID string, maxDepth int, showAllPaths bool, reverse bool) ([]*types.TreeNode, error) {
@@ -597,13 +1078,50 @@ func (s *EmbeddedDoltStore) RemoveLabel(ctx context.Context, issueID, label, act
 }
 
 func (s *EmbeddedDoltStore) GetLabels(ctx context.Context, issueID string) ([]string, error) {
-	_, _ = ctx, issueID
-	return nil, unimplemented("GetLabels")
+	m, err := s.GetLabelsForIssues(ctx, []string{issueID})
+	if err != nil {
+		return nil, err
+	}
+	return m[issueID], nil
 }
 
 func (s *EmbeddedDoltStore) GetLabelsForIssues(ctx context.Context, issueIDs []string) (map[string][]string, error) {
-	_, _ = ctx, issueIDs
-	return nil, unimplemented("GetLabelsForIssues")
+	if s == nil || s.exec == nil {
+		return nil, fmt.Errorf("embedded-dolt store is not initialized")
+	}
+	out := map[string][]string{}
+	if len(issueIDs) == 0 {
+		return out, nil
+	}
+
+	err := s.exec.withDB(ctx, "beads", func(db *sql.DB) error {
+		ph := make([]string, len(issueIDs))
+		args := make([]any, len(issueIDs))
+		for i, id := range issueIDs {
+			ph[i] = "?"
+			args[i] = id
+		}
+		// nolint:gosec // placeholders only
+		q := fmt.Sprintf(`SELECT issue_id, label FROM labels WHERE issue_id IN (%s) ORDER BY issue_id, label`, strings.Join(ph, ","))
+		rows, err := db.QueryContext(ctx, q, args...)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+
+		for rows.Next() {
+			var id, label string
+			if err := rows.Scan(&id, &label); err != nil {
+				return err
+			}
+			out[id] = append(out[id], label)
+		}
+		return rows.Err()
+	})
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 func (s *EmbeddedDoltStore) GetIssuesByLabel(ctx context.Context, label string) ([]*types.Issue, error) {
@@ -689,8 +1207,43 @@ func (s *EmbeddedDoltStore) GetCommentsForIssues(ctx context.Context, issueIDs [
 }
 
 func (s *EmbeddedDoltStore) GetCommentCounts(ctx context.Context, issueIDs []string) (map[string]int, error) {
-	_, _ = ctx, issueIDs
-	return nil, unimplemented("GetCommentCounts")
+	if s == nil || s.exec == nil {
+		return nil, fmt.Errorf("embedded-dolt store is not initialized")
+	}
+	out := map[string]int{}
+	if len(issueIDs) == 0 {
+		return out, nil
+	}
+
+	err := s.exec.withDB(ctx, "beads", func(db *sql.DB) error {
+		ph := make([]string, len(issueIDs))
+		args := make([]any, len(issueIDs))
+		for i, id := range issueIDs {
+			ph[i] = "?"
+			args[i] = id
+		}
+		// nolint:gosec // placeholders only
+		q := fmt.Sprintf(`SELECT issue_id, COUNT(*) FROM comments WHERE issue_id IN (%s) GROUP BY issue_id`, strings.Join(ph, ","))
+		rows, err := db.QueryContext(ctx, q, args...)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+
+		for rows.Next() {
+			var id string
+			var c int
+			if err := rows.Scan(&id, &c); err != nil {
+				return err
+			}
+			out[id] = c
+		}
+		return rows.Err()
+	})
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 // =============================================================================
@@ -700,6 +1253,240 @@ func (s *EmbeddedDoltStore) GetCommentCounts(ctx context.Context, issueIDs []str
 func (s *EmbeddedDoltStore) GetStatistics(ctx context.Context) (*types.Statistics, error) {
 	_ = ctx
 	return nil, unimplemented("GetStatistics")
+}
+
+// =============================================================================
+// Embedded-dolt read helpers
+// =============================================================================
+
+func (s *EmbeddedDoltStore) getIssuesByIDs(ctx context.Context, db *sql.DB, ids []string) ([]*types.Issue, error) {
+	if len(ids) == 0 {
+		return nil, nil
+	}
+	ph := make([]string, len(ids))
+	args := make([]any, len(ids))
+	for i, id := range ids {
+		ph[i] = "?"
+		args[i] = id
+	}
+
+	// Cast timestamps + JSON to strings for robust scanning across Dolt driver modes.
+	// nolint:gosec // placeholders only
+	q := fmt.Sprintf(`
+		SELECT
+			id, content_hash, title, description, design, acceptance_criteria, notes,
+			status, priority, issue_type, assignee, estimated_minutes,
+			CAST(created_at AS CHAR), created_by, owner, CAST(updated_at AS CHAR), CAST(closed_at AS CHAR), closed_by_session,
+			external_ref, spec_id, source_repo, close_reason,
+			CAST(deleted_at AS CHAR), deleted_by, delete_reason, original_type,
+			sender, ephemeral, wisp_type, pinned, is_template, crystallizes,
+			await_type, await_id, timeout_ns, waiters,
+			hook_bead, role_bead, agent_state, CAST(last_activity AS CHAR), role_type, rig, mol_type,
+			event_kind, actor, target, payload,
+			CAST(due_at AS CHAR), CAST(defer_until AS CHAR),
+			quality_score, work_type, source_system,
+			CAST(metadata AS CHAR)
+		FROM issues
+		WHERE id IN (%s)
+	`, strings.Join(ph, ","))
+
+	rows, err := db.QueryContext(ctx, q, args...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get issues by IDs: %w", err)
+	}
+	defer rows.Close()
+
+	var out []*types.Issue
+	for rows.Next() {
+		iss, err := scanEmbeddedIssueRow(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, iss)
+	}
+	return out, rows.Err()
+}
+
+func scanEmbeddedIssueRow(rows *sql.Rows) (*types.Issue, error) {
+	var issue types.Issue
+
+	var contentHash, status, issueType sql.NullString
+	var assignee sql.NullString
+	var estimatedMinutes sql.NullInt64
+	var createdAtStr, updatedAtStr sql.NullString
+	var closedAtStr, deletedAtStr, lastActivityStr, dueAtStr, deferUntilStr sql.NullString
+	var closedBySession, externalRef, specID, sourceRepo, closeReason sql.NullString
+	var deletedBy, deleteReason, originalType sql.NullString
+	var sender, wispType, molType, eventKind, actor, target, payload sql.NullString
+	var awaitType, awaitID, waiters sql.NullString
+	var hookBead, roleBead, agentState, roleType, rig sql.NullString
+	var ephemeral, pinned, isTemplate, crystallizes sql.NullInt64
+	var priority int
+	var timeoutNs sql.NullInt64
+	var qualityScore sql.NullFloat64
+	var workType, sourceSystem sql.NullString
+	var metadataStr sql.NullString
+	var createdBy, owner sql.NullString
+
+	if err := rows.Scan(
+		&issue.ID, &contentHash, &issue.Title, &issue.Description, &issue.Design, &issue.AcceptanceCriteria, &issue.Notes,
+		&status, &priority, &issueType, &assignee, &estimatedMinutes,
+		&createdAtStr, &createdBy, &owner, &updatedAtStr, &closedAtStr, &closedBySession,
+		&externalRef, &specID, &sourceRepo, &closeReason,
+		&deletedAtStr, &deletedBy, &deleteReason, &originalType,
+		&sender, &ephemeral, &wispType, &pinned, &isTemplate, &crystallizes,
+		&awaitType, &awaitID, &timeoutNs, &waiters,
+		&hookBead, &roleBead, &agentState, &lastActivityStr, &roleType, &rig, &molType,
+		&eventKind, &actor, &target, &payload,
+		&dueAtStr, &deferUntilStr,
+		&qualityScore, &workType, &sourceSystem,
+		&metadataStr,
+	); err != nil {
+		return nil, fmt.Errorf("failed to scan issue row: %w", err)
+	}
+
+	issue.Priority = priority
+	if contentHash.Valid {
+		issue.ContentHash = contentHash.String
+	}
+	if status.Valid {
+		issue.Status = types.Status(status.String)
+	}
+	if issueType.Valid {
+		issue.IssueType = types.IssueType(issueType.String)
+	}
+	if assignee.Valid {
+		issue.Assignee = assignee.String
+	}
+	if estimatedMinutes.Valid {
+		v := int(estimatedMinutes.Int64)
+		issue.EstimatedMinutes = &v
+	}
+	if createdAtStr.Valid {
+		issue.CreatedAt = parseTimeString(createdAtStr.String)
+	}
+	if updatedAtStr.Valid {
+		issue.UpdatedAt = parseTimeString(updatedAtStr.String)
+	}
+	issue.ClosedAt = parseNullableTimeString(closedAtStr)
+	issue.DeletedAt = parseNullableTimeString(deletedAtStr)
+	if lastActivity := parseNullableTimeString(lastActivityStr); lastActivity != nil {
+		issue.LastActivity = lastActivity
+	}
+	if due := parseNullableTimeString(dueAtStr); due != nil {
+		issue.DueAt = due
+	}
+	if deferUntil := parseNullableTimeString(deferUntilStr); deferUntil != nil {
+		issue.DeferUntil = deferUntil
+	}
+	if createdBy.Valid {
+		issue.CreatedBy = createdBy.String
+	}
+	if owner.Valid {
+		issue.Owner = owner.String
+	}
+	if closedBySession.Valid {
+		issue.ClosedBySession = closedBySession.String
+	}
+	if externalRef.Valid && externalRef.String != "" {
+		s := externalRef.String
+		issue.ExternalRef = &s
+	}
+	if specID.Valid {
+		issue.SpecID = specID.String
+	}
+	if sourceRepo.Valid {
+		issue.SourceRepo = sourceRepo.String
+	}
+	if closeReason.Valid {
+		issue.CloseReason = closeReason.String
+	}
+	if deletedBy.Valid {
+		issue.DeletedBy = deletedBy.String
+	}
+	if deleteReason.Valid {
+		issue.DeleteReason = deleteReason.String
+	}
+	if originalType.Valid {
+		issue.OriginalType = originalType.String
+	}
+	if sender.Valid {
+		issue.Sender = sender.String
+	}
+	if ephemeral.Valid && ephemeral.Int64 != 0 {
+		issue.Ephemeral = true
+	}
+	if wispType.Valid {
+		issue.WispType = types.WispType(wispType.String)
+	}
+	if pinned.Valid && pinned.Int64 != 0 {
+		issue.Pinned = true
+	}
+	if isTemplate.Valid && isTemplate.Int64 != 0 {
+		issue.IsTemplate = true
+	}
+	if crystallizes.Valid && crystallizes.Int64 != 0 {
+		issue.Crystallizes = true
+	}
+	if awaitType.Valid {
+		issue.AwaitType = awaitType.String
+	}
+	if awaitID.Valid {
+		issue.AwaitID = awaitID.String
+	}
+	if timeoutNs.Valid {
+		issue.Timeout = time.Duration(timeoutNs.Int64)
+	}
+	if waiters.Valid {
+		issue.Waiters = parseJSONStringArray(waiters.String)
+	}
+	if hookBead.Valid {
+		issue.HookBead = hookBead.String
+	}
+	if roleBead.Valid {
+		issue.RoleBead = roleBead.String
+	}
+	if agentState.Valid {
+		issue.AgentState = types.AgentState(agentState.String)
+	}
+	if roleType.Valid {
+		issue.RoleType = roleType.String
+	}
+	if rig.Valid {
+		issue.Rig = rig.String
+	}
+	if molType.Valid {
+		issue.MolType = types.MolType(molType.String)
+	}
+	if eventKind.Valid {
+		issue.EventKind = eventKind.String
+	}
+	if actor.Valid {
+		issue.Actor = actor.String
+	}
+	if target.Valid {
+		issue.Target = target.String
+	}
+	if payload.Valid {
+		issue.Payload = payload.String
+	}
+	if qualityScore.Valid {
+		v := float32(qualityScore.Float64)
+		issue.QualityScore = &v
+	}
+	if workType.Valid {
+		issue.WorkType = types.WorkType(workType.String)
+	}
+	if sourceSystem.Valid {
+		issue.SourceSystem = sourceSystem.String
+	}
+	if metadataStr.Valid && metadataStr.String != "" {
+		if json.Valid([]byte(metadataStr.String)) {
+			issue.Metadata = json.RawMessage([]byte(metadataStr.String))
+		}
+	}
+
+	return &issue, nil
 }
 
 func (s *EmbeddedDoltStore) GetMoleculeProgress(ctx context.Context, moleculeID string) (*types.MoleculeProgressStats, error) {

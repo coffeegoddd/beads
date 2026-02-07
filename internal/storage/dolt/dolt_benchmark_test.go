@@ -9,7 +9,6 @@
 // - Dependency operations
 // - Concurrent access patterns
 // - Version control operations
-//
 package dolt
 
 import (

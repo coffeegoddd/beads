@@ -66,6 +66,10 @@ func maybeShowTip(store storage.Storage) {
 	if jsonOutput || quietFlag {
 		return
 	}
+	// Embedded-dolt mode: tips are disabled (no metadata writes / commits).
+	if isEmbeddedDoltWorkspace() {
+		return
+	}
 
 	// Initialize RNG if needed
 	initTipRand()

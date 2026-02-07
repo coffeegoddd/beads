@@ -114,6 +114,10 @@ func GetImportTrigger(ctx context.Context, s storage.Storage) string {
 // (which reads config.yaml via viper). This avoids false positives when config.yaml
 // is loaded from the wrong directory context — matching ShouldImportJSONL's approach.
 func ShouldExportJSONL(ctx context.Context, s storage.Storage) bool {
+	// Embedded-dolt is DB-only: never export JSONL.
+	if isEmbeddedDoltWorkspace() {
+		return false
+	}
 	mode, err := s.GetConfig(ctx, SyncModeConfigKey)
 	if err != nil || mode == "" {
 		return true // default (git-portable) uses JSONL
@@ -127,6 +131,10 @@ func ShouldExportJSONL(ctx context.Context, s storage.Storage) bool {
 // going through GetSyncMode (which reads config.yaml via viper). This avoids false
 // negatives when config.yaml is loaded from the wrong directory context.
 func ShouldImportJSONL(ctx context.Context, s storage.Storage) bool {
+	// Embedded-dolt is DB-only: never import JSONL.
+	if isEmbeddedDoltWorkspace() {
+		return false
+	}
 	mode, err := s.GetConfig(ctx, SyncModeConfigKey)
 	if err != nil || mode == "" {
 		return true // default (git-portable) uses JSONL
