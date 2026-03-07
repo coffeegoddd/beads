@@ -18,6 +18,7 @@ import (
 	"github.com/steveyegge/beads/internal/configfile"
 	"github.com/steveyegge/beads/internal/doltserver"
 	"github.com/steveyegge/beads/internal/git"
+	"github.com/steveyegge/beads/internal/storage"
 	"github.com/steveyegge/beads/internal/storage/dolt"
 	"github.com/steveyegge/beads/internal/ui"
 	"github.com/steveyegge/beads/internal/utils"
@@ -402,11 +403,14 @@ environment variable.`,
 			doltCfg.ServerUser = serverUser
 		}
 
-		var store *dolt.DoltStore
-		store, err = dolt.New(ctx, doltCfg)
+		store, err := newDoltStore(ctx, doltCfg)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Error: failed to connect to dolt server: %v\n", err)
 			os.Exit(1)
+		}
+		doltStore, ok := store.(*dolt.DoltStore)
+		if !ok {
+			panic(fmt.Sprintf("newDoltStore returned unexpected type %T", store))
 		}
 
 		// Configure the git remote in the Dolt store so bd dolt push/pull
@@ -578,7 +582,7 @@ environment variable.`,
 				_ = store.Close()
 				FatalError("--from-jsonl specified but %s does not exist", localJSONLPath)
 			}
-			issueCount, importErr := importFromLocalJSONL(ctx, store, localJSONLPath)
+			issueCount, importErr := importFromLocalJSONL(ctx, doltStore, localJSONLPath)
 			if importErr != nil {
 				_ = store.Close()
 				FatalError("failed to import from JSONL: %v", importErr)
@@ -621,7 +625,7 @@ environment variable.`,
 
 		// Run contributor wizard if --contributor flag is set or user chose contributor
 		if contributor {
-			if err := runContributorWizard(ctx, store); err != nil {
+			if err := runContributorWizard(ctx, doltStore); err != nil {
 				canceled := isCanceled(err)
 				if canceled {
 					fmt.Fprintln(os.Stderr, "Setup canceled.")
@@ -644,7 +648,7 @@ environment variable.`,
 
 		// Run team wizard if --team flag is set
 		if team {
-			if err := runTeamWizard(ctx, store); err != nil {
+			if err := runTeamWizard(ctx, doltStore); err != nil {
 				canceled := isCanceled(err)
 				if canceled {
 					fmt.Fprintln(os.Stderr, "Setup canceled.")
@@ -1221,7 +1225,7 @@ func generateProjectID() string {
 	return fmt.Sprintf("%08x-%04x-%04x-%04x-%012x", b[0:4], b[4:6], b[6:8], b[8:10], b[10:16])
 }
 
-func verifyMetadata(ctx context.Context, store *dolt.DoltStore, key, value string) bool {
+func verifyMetadata(ctx context.Context, store storage.DoltStorage, key, value string) bool {
 	if err := store.SetMetadata(ctx, key, value); err != nil {
 		fmt.Fprintf(os.Stderr, "Warning: failed to write %s metadata: %v\n", key, err)
 		fmt.Fprintf(os.Stderr, "  Run 'bd doctor --fix' to repair.\n")
