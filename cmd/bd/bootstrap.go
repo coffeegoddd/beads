@@ -112,7 +112,7 @@ func detectBootstrapAction(beadsDir string, cfg *configfile.Config) BootstrapPla
 
 	// Check for existing database (path differs between server and embedded mode)
 	var dbPath string
-	if isEmbeddedDolt {
+	if isEmbeddedMode() {
 		dbPath = filepath.Join(beadsDir, "embeddeddolt")
 	} else {
 		dbPath = doltserver.ResolveDoltDir(beadsDir)
@@ -177,7 +177,7 @@ func printBootstrapPlan(plan BootstrapPlan) {
 	switch plan.Action {
 	case "none":
 		fmt.Printf("✓ Database already exists: %s\n", plan.BeadsDir)
-		if isEmbeddedDolt {
+		if isEmbeddedMode() {
 			fmt.Printf("  Nothing to do.\n")
 		} else {
 			fmt.Printf("  Nothing to do. Use 'bd doctor' to check health.\n")
@@ -283,13 +283,11 @@ func executeRestoreAction(ctx context.Context, plan BootstrapPlan, cfg *configfi
 		return fmt.Errorf("commit init: %w", err)
 	}
 
-	result, err := runBackupRestore(ctx, s, plan.BackupDir, false)
-	if err != nil {
+	if err := runBackupRestore(ctx, s, plan.BackupDir, false); err != nil {
 		return fmt.Errorf("restore from backup: %w", err)
 	}
 
-	fmt.Fprintf(os.Stderr, "Restored from backup: %d issues, %d comments, %d dependencies, %d labels\n",
-		result.Issues, result.Comments, result.Dependencies, result.Labels)
+	fmt.Fprintf(os.Stderr, "Restored from backup\n")
 	return nil
 }
 
@@ -332,7 +330,7 @@ func executeJSONLImportAction(ctx context.Context, plan BootstrapPlan, cfg *conf
 func executeSyncAction(ctx context.Context, plan BootstrapPlan, cfg *configfile.Config) error {
 	dbName := cfg.GetDoltDatabase()
 
-	if isEmbeddedDolt {
+	if isEmbeddedMode() {
 		// Embedded mode: open a connection to the embedded engine and use
 		// DOLT_CLONE to create the database from the remote URL.
 		dataDir := filepath.Join(plan.BeadsDir, "embeddeddolt")

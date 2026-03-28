@@ -58,6 +58,7 @@ var (
 )
 var (
 	sandboxMode     bool
+	serverMode      bool               // True when using external dolt sql-server (dolt_mode=server)
 	readonlyMode    bool               // Read-only mode: block write operations (for worker sandboxes)
 	storeIsReadOnly bool               // Track if store was opened read-only (for staleness checks)
 	lockTimeout     = 30 * time.Second // Dolt open timeout (fixed default)
@@ -146,6 +147,25 @@ func loadEnvironment() {
 	// and resolves BEADS_DIR, redirects, and worktree paths.
 	if beadsDir := beads.FindBeadsDir(); beadsDir != "" {
 		loadBeadsEnvFile(beadsDir)
+	}
+}
+
+// loadServerModeFromConfig loads the storage mode (embedded vs server) from
+// metadata.json so that isEmbeddedMode() returns the correct value. Called
+// for commands that skip full DB init but still need to know the mode.
+func loadServerModeFromConfig() {
+	beadsDir := beads.FindBeadsDir()
+	if beadsDir == "" {
+		return
+	}
+	cfg, err := configfile.Load(beadsDir)
+	if err != nil || cfg == nil {
+		return
+	}
+	sm := cfg.IsDoltServerMode()
+	serverMode = sm
+	if cmdCtx != nil {
+		cmdCtx.ServerMode = sm
 	}
 }
 
@@ -401,6 +421,11 @@ var rootCmd = &cobra.Command{
 		// commands like "bd doctor --server" pick up per-project Dolt credentials.
 		loadEnvironment()
 
+		// Load storage mode (embedded vs server) early so that isEmbeddedMode()
+		// returns the correct value for all commands, including those that skip
+		// full DB initialization (e.g., bd dolt status, bd doctor, bd bootstrap).
+		loadServerModeFromConfig()
+
 		// GH#1093: Check noDbCommands BEFORE expensive operations
 		// to avoid spawning git subprocesses for simple commands
 		// like "bd version" that don't need database access.
@@ -591,6 +616,12 @@ var rootCmd = &cobra.Command{
 			fmt.Fprintf(os.Stderr, "warning: failed to load beads config from %s: %v\n", beadsDir, cfgErr)
 		}
 		if cfg != nil {
+			doltCfg.ServerMode = cfg.IsDoltServerMode()
+			serverMode = doltCfg.ServerMode
+			if cmdCtx != nil {
+				cmdCtx.ServerMode = doltCfg.ServerMode
+			}
+
 			// Always set database name (needed for bootstrap to find
 			// prefix-based databases like "beads_hq"; see #1669)
 			doltCfg.Database = cfg.GetDoltDatabase()
@@ -626,7 +657,7 @@ var rootCmd = &cobra.Command{
 		// These prevent the Dolt server from opening databases (SIGSEGV or
 		// "database is locked"). Safe because we haven't connected yet.
 		// NOTE: Intentionally skipped for embedded mode.
-		if !isEmbeddedDolt {
+		if !isEmbeddedMode() {
 			if removed, _ := dolt.CleanStaleNomsLocks(doltPath); removed > 0 {
 				debug.Logf("cleaned %d stale noms LOCK file(s) from %s", removed, doltPath)
 			}
