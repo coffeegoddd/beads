@@ -129,6 +129,45 @@ func TestSchemaAfterInit(t *testing.T) {
 		}
 	}
 
+	// --- Verify wisps tables are registered as nonlocal ---
+
+	for _, table := range []string{"wisps", "wisp_labels", "wisp_dependencies", "wisp_events", "wisp_comments"} {
+		var count int
+		err := db.QueryRowContext(ctx,
+			"SELECT COUNT(*) FROM dolt_nonlocal_tables WHERE table_name = ?", table).Scan(&count)
+		if err != nil {
+			t.Fatalf("failed to check dolt_nonlocal_tables for %s: %v", table, err)
+		}
+		if count != 1 {
+			t.Errorf("table %s should be registered in dolt_nonlocal_tables", table)
+		}
+	}
+
+	// Verify dolt_ignore no longer has wisps entries.
+	var ignoreCount int
+	err = db.QueryRowContext(ctx,
+		"SELECT COUNT(*) FROM dolt_ignore WHERE pattern IN ('wisps', 'wisp_%')").Scan(&ignoreCount)
+	if err != nil {
+		t.Fatalf("failed to query dolt_ignore: %v", err)
+	}
+	if ignoreCount != 0 {
+		t.Errorf("expected 0 dolt_ignore patterns for wisps, got %d", ignoreCount)
+	}
+
+	// --- Verify nonlocal tables don't appear in dolt_status ---
+
+	statusRows, err := db.QueryContext(ctx,
+		"SELECT table_name FROM dolt_status WHERE table_name LIKE 'wisp%' OR table_name = 'wisps'")
+	if err != nil {
+		t.Fatalf("querying dolt_status for wisps: %v", err)
+	}
+	var staleTable string
+	for statusRows.Next() {
+		statusRows.Scan(&staleTable)
+		t.Errorf("nonlocal table %s should NOT appear in dolt_status", staleTable)
+	}
+	statusRows.Close()
+
 	// --- Verify default config ---
 
 	var configCount int
@@ -197,8 +236,8 @@ func TestSchemaAfterInit(t *testing.T) {
 
 // TestBackfillCreatesWispTables simulates the server-to-embedded upgrade path
 // where core tables exist but schema_migrations is empty. The backfill must
-// actually execute migrations (not just mark them applied) so that dolt_ignore'd
-// wisp tables get created. Regression test for GH#2979.
+// actually execute migrations (not just mark them applied) so that nonlocal
+// wisp tables get created and registered. Regression test for GH#2979.
 func TestBackfillCreatesWispTables(t *testing.T) {
 	if os.Getenv("BEADS_TEST_EMBEDDED_DOLT") != "1" {
 		t.Skip("set BEADS_TEST_EMBEDDED_DOLT=1 to run embedded dolt tests")
@@ -217,13 +256,14 @@ func TestBackfillCreatesWispTables(t *testing.T) {
 
 	// Step 2: Drop wisp tables and clear schema_migrations to simulate
 	// an upgrade from server-mode (core tables exist, no migration tracking,
-	// no wisp tables since they're dolt_ignore'd and weren't imported).
+	// no wisp tables since they weren't imported).
 	db, cleanup, err := embeddeddolt.OpenSQL(ctx, dataDir, "testdb", "main")
 	if err != nil {
 		store.Close()
 		t.Fatalf("OpenSQL: %v", err)
 	}
 	for _, stmt := range []string{
+		"DELETE FROM dolt_nonlocal_tables WHERE table_name IN ('wisps', 'wisp_labels', 'wisp_dependencies', 'wisp_events', 'wisp_comments')",
 		"DROP TABLE IF EXISTS wisp_comments",
 		"DROP TABLE IF EXISTS wisp_events",
 		"DROP TABLE IF EXISTS wisp_labels",
@@ -258,6 +298,17 @@ func TestBackfillCreatesWispTables(t *testing.T) {
 		var count int
 		if err := db2.QueryRowContext(ctx, "SELECT COUNT(*) FROM `"+table+"`").Scan(&count); err != nil {
 			t.Errorf("wisp table %s missing after backfill: %v", table, err)
+		}
+	}
+
+	// Verify wisps are registered as nonlocal after backfill.
+	for _, table := range []string{"wisps", "wisp_dependencies", "wisp_labels", "wisp_events", "wisp_comments"} {
+		var nlCount int
+		if err := db2.QueryRowContext(ctx,
+			"SELECT COUNT(*) FROM dolt_nonlocal_tables WHERE table_name = ?", table).Scan(&nlCount); err != nil {
+			t.Errorf("dolt_nonlocal_tables check for %s: %v", table, err)
+		} else if nlCount != 1 {
+			t.Errorf("table %s should be in dolt_nonlocal_tables after backfill", table)
 		}
 	}
 

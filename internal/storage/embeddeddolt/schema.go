@@ -96,7 +96,7 @@ func migrateUp(ctx context.Context, tx *sql.Tx) (int, error) {
 // backfillMigrations runs all migrations in order, ignoring "already exists"
 // errors, and records each version. Used when a database is restored from a
 // backup that predates the schema_migrations tracking table — most of the
-// schema is already correct, but dolt_ignore'd tables (wisps) may be missing.
+// schema is already correct, but nonlocal tables (wisps) may need registration.
 func backfillMigrations(ctx context.Context, tx *sql.Tx) (int, error) {
 	return runMigrations(ctx, tx, 0, true)
 }

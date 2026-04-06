@@ -244,8 +244,8 @@ func (s *EmbeddedDoltStore) initSchema(ctx context.Context) error {
 				return fmt.Errorf("dolt add after migrations: %w", err)
 			}
 			if _, err := tx.ExecContext(ctx, "CALL DOLT_COMMIT('-m', 'schema: apply migrations')"); err != nil {
-				// Backfill migrations may only create dolt_ignore'd tables (e.g. wisps),
-				// leaving nothing staged for commit. This is expected.
+				// Backfill migrations may produce no committable changes if all
+				// tables already exist. This is expected.
 				if !strings.Contains(err.Error(), "nothing to commit") {
 					return fmt.Errorf("dolt commit after migrations: %w", err)
 				}
