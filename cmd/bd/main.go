@@ -27,9 +27,9 @@ import (
 	"github.com/steveyegge/beads/internal/hooks"
 	"github.com/steveyegge/beads/internal/molecules"
 	"github.com/steveyegge/beads/internal/storage"
-	"github.com/steveyegge/beads/internal/storage/dolt"
 	"github.com/steveyegge/beads/internal/telemetry"
 	"github.com/steveyegge/beads/internal/utils"
+	"github.com/steveyegge/beads/internal/workspace"
 	"go.opentelemetry.io/otel/attribute"
 	oteltrace "go.opentelemetry.io/otel/trace"
 )
@@ -898,64 +898,36 @@ var rootCmd = &cobra.Command{
 		// Initialize direct storage access
 		var err error
 
-		// Create Dolt storage config — resolve dolt data dir which may be
-		// on a different filesystem (e.g., ext4 for performance on WSL).
-		doltPath := doltserver.ResolveDoltDir(beadsDir)
-		doltCfg := &dolt.Config{
-			ReadOnly: useReadOnly,
-			BeadsDir: beadsDir,
+		// Resolve unified workspace context — single source of truth for
+		// all workspace paths, server config, worktree state, and project
+		// identity. Replaces the scattered configfile.Load + doltserver.DefaultConfig
+		// + doltserver.ResolveDoltDir assembly that was here before.
+		ws, wsErr := workspace.ResolveForBeadsDir(beadsDir)
+		if wsErr != nil {
+			FatalError("failed to resolve workspace from %s: %v", beadsDir, wsErr)
+		}
+		if cmdCtx != nil {
+			cmdCtx.Workspace = ws
 		}
 
-		// Load config to get database name and server connection settings
-		cfg, cfgErr := configfile.Load(beadsDir)
-		if cfgErr != nil {
-			fmt.Fprintf(os.Stderr, "warning: failed to load beads config from %s: %v\n", beadsDir, cfgErr)
-		}
-		if cfg != nil {
-			doltCfg.ServerMode = cfg.IsDoltServerMode()
-			// Shared server mode (dolt.shared-server in config.yaml) is a
-			// form of server mode. Override metadata.json if it still says
-			// embedded — handles installs created before GH#2946 fix.
-			if !doltCfg.ServerMode && doltserver.IsSharedServerMode() {
-				doltCfg.ServerMode = true
-			}
-			serverMode = doltCfg.ServerMode
-			if cmdCtx != nil {
-				cmdCtx.ServerMode = doltCfg.ServerMode
-			}
+		// Apply CLI auto-start policy before building the dolt config.
+		ws.ApplyAutoStart()
 
-			// Always set database name (needed for bootstrap to find
-			// prefix-based databases like "beads_hq"; see #1669)
-			doltCfg.Database = cfg.GetDoltDatabase()
+		// Build dolt.Config from the workspace context.
+		doltCfg := ws.ToDoltConfig()
+		doltCfg.ReadOnly = useReadOnly
+		doltCfg.SyncRemote = resolveSyncRemote()
 
-			doltCfg.ServerHost = cfg.GetDoltServerHost()
-			// Use doltserver.DefaultConfig for port resolution (env > port file >
-			// config.yaml). Port 0 is fine here — auto-start will resolve it.
-			doltCfg.ServerPort = doltserver.DefaultConfig(beadsDir).Port
-			doltCfg.ServerSocket = cfg.GetDoltServerSocket()
-			doltCfg.ServerUser = cfg.GetDoltServerUser()
-			// Use the resolved port for credential lookup — metadata.json port
-			// and runtime port can diverge (e.g., tunnel on 3308 vs local on 3307).
-			doltCfg.ServerPassword = cfg.GetDoltServerPasswordForPort(doltCfg.ServerPort)
-			doltCfg.ServerTLS = cfg.GetDoltServerTLS()
-		} else if cfgErr == nil {
-			// Load returned (nil, nil) — no config file found.
-			// Fall back to the canonical default database name; matches the
-			// behavior of newDoltStoreFromConfig / newReadOnlyStoreFromConfig
-			// (see store_factory.go). Without this, embeddeddolt.New rejects
-			// the empty database name with "database name must not be empty
-			// (caller should default to \"beads\")".
-			fmt.Fprintf(os.Stderr, "warning: no beads configuration found in %s; using default database name %q\n", beadsDir, configfile.DefaultDoltDatabase)
-			doltCfg.Database = configfile.DefaultDoltDatabase
+		// Sync server mode to globals for backward compatibility.
+		serverMode = doltCfg.ServerMode
+		if cmdCtx != nil {
+			cmdCtx.ServerMode = doltCfg.ServerMode
 		}
-		// If config parse failed (cfgErr != nil), still default the database
-		// name so the store-open error is about the real problem (the parse
-		// failure warning already printed) rather than a confusing "database
-		// name must not be empty" downstream.
+
+		// Ensure database name is never empty.
 		if doltCfg.Database == "" {
 			doltCfg.Database = configfile.DefaultDoltDatabase
 		}
-		doltCfg.SyncRemote = resolveSyncRemote()
 
 		// --global flag: switch to the global shared-server database.
 		// Must be in shared-server mode; errors otherwise.
@@ -966,18 +938,12 @@ var rootCmd = &cobra.Command{
 			doltCfg.Database = doltserver.GlobalDatabaseName
 		}
 
-		// Keep standalone CLI auto-start behavior centralized so doctor and
-		// other helper paths stay in lockstep with the main command path.
-		dolt.ApplyCLIAutoStart(beadsDir, doltCfg)
-
 		// Server mode defaults auto-commit to OFF because the server handles
 		// commits via its own transaction lifecycle; firing DOLT_COMMIT after
 		// every write under concurrent load causes 'database is read only' errors.
 		if strings.TrimSpace(doltAutoCommit) == "" {
 			doltAutoCommit = string(doltAutoCommitOff)
 		}
-
-		doltCfg.Path = doltPath
 
 		// WARNING: DO NOT remove, delete, or modify files inside Dolt's .dolt/
 		// directory — including noms/LOCK files. These are Dolt-internal files.

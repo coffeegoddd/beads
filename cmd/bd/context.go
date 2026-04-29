@@ -10,6 +10,7 @@ import (
 
 	"github.com/steveyegge/beads/internal/hooks"
 	"github.com/steveyegge/beads/internal/storage"
+	"github.com/steveyegge/beads/internal/workspace"
 )
 
 // CommandContext holds all runtime state for command execution.
@@ -31,6 +32,11 @@ type CommandContext struct {
 
 	// Storage mode — true when connected to an external dolt sql-server.
 	ServerMode bool
+
+	// Workspace is the unified workspace resolution result.
+	// Contains all resolved paths, server config, worktree state, etc.
+	// May be nil for no-db commands or during early initialization.
+	Workspace *workspace.WorkspaceContext
 
 	// Runtime state
 	Store      storage.DoltStorage
