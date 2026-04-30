@@ -65,6 +65,7 @@ func init() {
 
 // runBackupRestore restores the database from a Dolt-native backup.
 func runBackupRestore(ctx context.Context, s storage.DoltStorage, dir string, force bool) error {
+	fmt.Printf("DUSTIN: runBackupRestore called dir=%s force=%v\n", dir, force)
 	if s == nil {
 		return fmt.Errorf("database is not initialized. Run 'bd init' first")
 	}
@@ -74,9 +75,12 @@ func runBackupRestore(ctx context.Context, s storage.DoltStorage, dir string, fo
 		return fmt.Errorf("storage backend does not support backup operations")
 	}
 
+	fmt.Printf("DUSTIN: calling bs.RestoreDatabase\n")
 	if err := bs.RestoreDatabase(ctx, dir, force); err != nil {
+		fmt.Printf("DUSTIN: RestoreDatabase failed: %v\n", err)
 		return err
 	}
+	fmt.Printf("DUSTIN: RestoreDatabase succeeded\n")
 
 	// After a force restore, the database's _project_id may differ from
 	// metadata.json (the backup came from a different project). Sync

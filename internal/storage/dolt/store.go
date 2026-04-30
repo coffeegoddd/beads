@@ -753,19 +753,30 @@ func (s *DoltStore) BackupDatabase(ctx context.Context, dir string) error {
 // RestoreDatabase restores the database from a Dolt backup at dir.
 // When force is true, an existing database is overwritten.
 func (s *DoltStore) RestoreDatabase(ctx context.Context, dir string, force bool) error {
+	fmt.Printf("DUSTIN: DoltStore.RestoreDatabase dir=%s force=%v database=%s dbPath=%s\n", dir, force, s.database, s.dbPath)
 	info, err := os.Stat(dir)
 	if err != nil {
+		fmt.Printf("DUSTIN: os.Stat failed: %v\n", err)
 		return fmt.Errorf("backup source does not exist: %w", err)
 	}
 	if !info.IsDir() {
+		fmt.Printf("DUSTIN: not a directory\n")
 		return fmt.Errorf("backup source is not a directory: %s", dir)
 	}
 
 	backupURL, err := versioncontrolops.DirToFileURL(dir)
 	if err != nil {
+		fmt.Printf("DUSTIN: DirToFileURL failed: %v\n", err)
 		return err
 	}
-	return versioncontrolops.BackupRestore(ctx, s.db, backupURL, s.database, force)
+	fmt.Printf("DUSTIN: calling BackupRestore url=%s dbName=%s force=%v\n", backupURL, s.database, force)
+	err = versioncontrolops.BackupRestore(ctx, s.db, backupURL, s.database, force)
+	if err != nil {
+		fmt.Printf("DUSTIN: BackupRestore failed: %v\n", err)
+	} else {
+		fmt.Printf("DUSTIN: BackupRestore succeeded\n")
+	}
+	return err
 }
 
 // QueryContext wraps s.db.QueryContext with retry for transient errors.

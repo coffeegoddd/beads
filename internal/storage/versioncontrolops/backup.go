@@ -35,14 +35,21 @@ func BackupRemove(ctx context.Context, db DBConn, name string) error {
 // the named database. When force is true, an existing database with the
 // same name is overwritten. Mirrors the CLI: dolt backup restore [--force] <url> <db_name>
 func BackupRestore(ctx context.Context, db DBConn, url, dbName string, force bool) error {
+	fmt.Printf("DUSTIN: BackupRestore url=%s dbName=%s force=%v\n", url, dbName, force)
 	if force {
+		fmt.Printf("DUSTIN: executing CALL DOLT_BACKUP('restore', '--force', '%s', '%s')\n", url, dbName)
 		if _, err := db.ExecContext(ctx, "CALL DOLT_BACKUP('restore', '--force', ?, ?)", url, dbName); err != nil {
+			fmt.Printf("DUSTIN: CALL DOLT_BACKUP restore --force failed: %v\n", err)
 			return fmt.Errorf("restore from backup %s: %w", url, err)
 		}
+		fmt.Printf("DUSTIN: CALL DOLT_BACKUP restore --force succeeded\n")
 	} else {
+		fmt.Printf("DUSTIN: executing CALL DOLT_BACKUP('restore', '%s', '%s')\n", url, dbName)
 		if _, err := db.ExecContext(ctx, "CALL DOLT_BACKUP('restore', ?, ?)", url, dbName); err != nil {
+			fmt.Printf("DUSTIN: CALL DOLT_BACKUP restore failed: %v\n", err)
 			return fmt.Errorf("restore from backup %s: %w", url, err)
 		}
+		fmt.Printf("DUSTIN: CALL DOLT_BACKUP restore succeeded\n")
 	}
 	return nil
 }
