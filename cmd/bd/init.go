@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -22,6 +23,8 @@ import (
 	"github.com/steveyegge/beads/internal/git"
 	"github.com/steveyegge/beads/internal/storage"
 	"github.com/steveyegge/beads/internal/storage/dolt"
+	"github.com/steveyegge/beads/internal/storage/domain"
+	"github.com/steveyegge/beads/internal/storage/uow"
 	"github.com/steveyegge/beads/internal/templates/agents"
 	"github.com/steveyegge/beads/internal/ui"
 	"github.com/steveyegge/beads/internal/utils"
@@ -107,9 +110,6 @@ Non-interactive mode (--non-interactive or BD_NON_INTERACTIVE=1):
 		serverRootPath, _ := cmd.Flags().GetString("proxied-server-root-path")
 		if os.Getenv("BEADS_DOLT_PROXIED_SERVER") == "1" {
 			initProxiedServer = true
-		}
-		if initProxiedServer {
-			FatalError("--proxied-server is not yet implemented")
 		}
 		if initProxiedServer && initServerMode {
 			FatalError("--server and --proxied-server are mutually exclusive")
@@ -811,16 +811,52 @@ Non-interactive mode (--non-interactive or BD_NON_INTERACTIVE=1):
 			}
 		}
 
-		store, err := newDoltStore(ctx, doltCfg)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "Error: failed to open Dolt store: %v\n", err)
-			os.Exit(1)
+		var (
+			store      storage.DoltStorage
+			uowProv    uow.UnitOfWorkProvider
+			unitOfWork uow.UnitOfWork
+		)
+
+		if initProxiedServer {
+			uowProv, err = newUOWProvider(ctx, doltCfg)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Error: failed to construct UoW provider: %v\n", err)
+				os.Exit(1)
+			}
+			defer func() {
+				if cerr := uowProv.Close(ctx); cerr != nil {
+					fmt.Fprintf(os.Stderr, "Warning: failed to close UoW provider: %v\n", cerr)
+				}
+			}()
+
+			unitOfWork, err = uowProv.NewUOW(ctx)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Error: failed to open bootstrap UoW: %v\n", err)
+				os.Exit(1)
+			}
+			defer unitOfWork.Close(ctx)
+		} else {
+			store, err = newDoltStore(ctx, doltCfg)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Error: failed to open Dolt store: %v\n", err)
+				os.Exit(1)
+			}
+		}
+
+		proxiedNotImplemented := func(op string, err error) bool {
+			if err == nil || !errors.Is(err, domain.ErrUseCaseNotImplemented) {
+				return false
+			}
+			if !quiet {
+				fmt.Fprintf(os.Stderr, "Warning: %s skipped in proxied-server mode (use case not implemented)\n", op)
+			}
+			return true
 		}
 
 		// Initialize global database schema and config in shared-server mode.
 		// Opens a separate store connection to beads_global with CreateIfMissing
 		// to trigger schema migration, then seeds the issue prefix and project ID.
-		if sharedServer || doltserver.IsSharedServerMode() {
+		if !initProxiedServer && (sharedServer || doltserver.IsSharedServerMode()) {
 			initGlobalDatabaseConfig(ctx, doltCfg, quiet)
 		}
 
@@ -832,13 +868,23 @@ Non-interactive mode (--non-interactive or BD_NON_INTERACTIVE=1):
 		// they cause every Dolt fetch to fail and leak tmp_pack_* files
 		// that can consume 100+ GB of disk space (GH#3354, GH#3356).
 		if shouldWireInitRemote(syncURL, syncFromRemote, syncURLFromConfig) {
-			hasRemote, _ := store.HasRemote(ctx, "origin")
-			if !hasRemote {
-				if err := store.AddRemote(ctx, "origin", syncURL); err != nil {
-					fmt.Fprintf(os.Stderr, "Warning: failed to add remote 'origin': %v\n", err)
-					// Non-fatal — user can add manually with: bd dolt remote add origin <url>
+			if initProxiedServer {
+				if err := unitOfWork.Bootstrap().EnsureRemote(ctx, "origin", syncURL); err != nil {
+					if !proxiedNotImplemented("EnsureRemote(origin)", err) {
+						fmt.Fprintf(os.Stderr, "Warning: failed to add remote 'origin': %v\n", err)
+					}
 				} else if !quiet {
 					fmt.Printf("  %s Configured Dolt remote: origin → %s\n", ui.RenderPass("✓"), syncURL)
+				}
+			} else {
+				hasRemote, _ := store.HasRemote(ctx, "origin")
+				if !hasRemote {
+					if err := store.AddRemote(ctx, "origin", syncURL); err != nil {
+						fmt.Fprintf(os.Stderr, "Warning: failed to add remote 'origin': %v\n", err)
+						// Non-fatal — user can add manually with: bd dolt remote add origin <url>
+					} else if !quiet {
+						fmt.Printf("  %s Configured Dolt remote: origin → %s\n", ui.RenderPass("✓"), syncURL)
+					}
 				}
 			}
 		}
@@ -849,15 +895,23 @@ Non-interactive mode (--non-interactive or BD_NON_INTERACTIVE=1):
 		// Failure here indicates a serious problem that prevents normal operation.
 
 		// Set the issue prefix in config (only if not already configured —
-		// avoid clobbering when multiple rigs share the same Dolt database)
-		existing, _ := store.GetConfig(ctx, "issue_prefix")
-		if existing == "" {
-			// Sanitize dots to underscores so issue IDs (e.g. "GPUPolynomials_jl-1")
-			// remain valid identifiers. Must match DoltDatabase sanitization above.
-			issuePrefix := strings.ReplaceAll(prefix, ".", "_")
-			if err := store.SetConfig(ctx, "issue_prefix", issuePrefix); err != nil {
-				_ = store.Close()
-				FatalError("failed to set issue prefix: %v", err)
+		// avoid clobbering when multiple rigs share the same Dolt database).
+		// Sanitize dots to underscores so issue IDs (e.g. "GPUPolynomials_jl-1")
+		// remain valid identifiers. Must match DoltDatabase sanitization above.
+		issuePrefix := strings.ReplaceAll(prefix, ".", "_")
+		if initProxiedServer {
+			if _, err := unitOfWork.Bootstrap().EnsureIssuePrefix(ctx, issuePrefix); err != nil {
+				if !proxiedNotImplemented("EnsureIssuePrefix", err) {
+					FatalError("failed to set issue prefix: %v", err)
+				}
+			}
+		} else {
+			existing, _ := store.GetConfig(ctx, "issue_prefix")
+			if existing == "" {
+				if err := store.SetConfig(ctx, "issue_prefix", issuePrefix); err != nil {
+					_ = store.Close()
+					FatalError("failed to set issue prefix: %v", err)
+				}
 			}
 		}
 
@@ -867,8 +921,16 @@ Non-interactive mode (--non-interactive or BD_NON_INTERACTIVE=1):
 		// Belt-and-suspenders: write then verify read-back for each field.
 
 		// Store bd version in clone-local metadata (dolt-ignored, no merge conflicts)
-		if err := store.SetLocalMetadata(ctx, "bd_version", Version); err != nil {
-			fmt.Fprintf(os.Stderr, "Warning: failed to write bd_version local metadata: %v\n", err)
+		if initProxiedServer {
+			if err := unitOfWork.Bootstrap().RecordBDVersion(ctx, Version); err != nil {
+				if !proxiedNotImplemented("RecordBDVersion", err) {
+					fmt.Fprintf(os.Stderr, "Warning: failed to write bd_version local metadata: %v\n", err)
+				}
+			}
+		} else {
+			if err := store.SetLocalMetadata(ctx, "bd_version", Version); err != nil {
+				fmt.Fprintf(os.Stderr, "Warning: failed to write bd_version local metadata: %v\n", err)
+			}
 		}
 
 		// Compute and store repository fingerprint (FR-015)
@@ -878,7 +940,19 @@ Non-interactive mode (--non-interactive or BD_NON_INTERACTIVE=1):
 				fmt.Fprintf(os.Stderr, "Warning: could not compute repository ID: %v\n", err)
 			}
 		} else {
-			if verifyMetadata(ctx, store, "repo_id", repoID) && !quiet {
+			var verified bool
+			if initProxiedServer {
+				ok, err := unitOfWork.Bootstrap().RecordRepoID(ctx, repoID)
+				if err != nil {
+					if !proxiedNotImplemented("RecordRepoID", err) && !quiet {
+						fmt.Fprintf(os.Stderr, "Warning: failed to write repo_id metadata: %v\n", err)
+					}
+				}
+				verified = ok
+			} else {
+				verified = verifyMetadata(ctx, store, "repo_id", repoID)
+			}
+			if verified && !quiet {
 				fmt.Printf("  Repository ID: %s\n", repoID[:8])
 			}
 		}
@@ -890,7 +964,19 @@ Non-interactive mode (--non-interactive or BD_NON_INTERACTIVE=1):
 				fmt.Fprintf(os.Stderr, "Warning: could not compute clone ID: %v\n", err)
 			}
 		} else {
-			if verifyMetadata(ctx, store, "clone_id", cloneID) && !quiet {
+			var verified bool
+			if initProxiedServer {
+				ok, err := unitOfWork.Bootstrap().RecordCloneID(ctx, cloneID)
+				if err != nil {
+					if !proxiedNotImplemented("RecordCloneID", err) && !quiet {
+						fmt.Fprintf(os.Stderr, "Warning: failed to write clone_id metadata: %v\n", err)
+					}
+				}
+				verified = ok
+			} else {
+				verified = verifyMetadata(ctx, store, "clone_id", cloneID)
+			}
+			if verified && !quiet {
 				fmt.Printf("  Clone ID: %s\n", cloneID)
 			}
 		}
@@ -925,8 +1011,23 @@ Non-interactive mode (--non-interactive or BD_NON_INTERACTIVE=1):
 			// source identity and cause cross-project verification to
 			// fail on subsequent pulls.
 			if cfg.ProjectID == "" {
-				if store != nil && (database != "" || bootstrappedFromRemote) {
-					if existingID, err := store.GetMetadata(ctx, "_project_id"); err == nil && existingID != "" {
+				if database != "" || bootstrappedFromRemote {
+					var existingID string
+					if initProxiedServer {
+						id, err := unitOfWork.Bootstrap().ReadProjectID(ctx)
+						if err != nil {
+							if !proxiedNotImplemented("ReadProjectID", err) && !quiet {
+								fmt.Fprintf(os.Stderr, "Warning: failed to read existing _project_id: %v\n", err)
+							}
+						} else {
+							existingID = id
+						}
+					} else if store != nil {
+						if id, err := store.GetMetadata(ctx, "_project_id"); err == nil {
+							existingID = id
+						}
+					}
+					if existingID != "" {
 						cfg.ProjectID = existingID
 						if !quiet {
 							fmt.Printf("  %s Adopted project identity from existing database\n", ui.RenderPass("✓"))
@@ -1012,9 +1113,17 @@ Non-interactive mode (--non-interactive or BD_NON_INTERACTIVE=1):
 			}
 
 			// Write project identity to database for cross-project verification (GH#2372)
-			if cfg.ProjectID != "" && store != nil {
-				if err := store.SetMetadata(ctx, "_project_id", cfg.ProjectID); err != nil {
-					fmt.Fprintf(os.Stderr, "Warning: failed to write project ID to database: %v\n", err)
+			if cfg.ProjectID != "" {
+				if initProxiedServer {
+					if err := unitOfWork.Bootstrap().RecordProjectID(ctx, cfg.ProjectID); err != nil {
+						if !proxiedNotImplemented("RecordProjectID", err) {
+							fmt.Fprintf(os.Stderr, "Warning: failed to write project ID to database: %v\n", err)
+						}
+					}
+				} else if store != nil {
+					if err := store.SetMetadata(ctx, "_project_id", cfg.ProjectID); err != nil {
+						fmt.Fprintf(os.Stderr, "Warning: failed to write project ID to database: %v\n", err)
+					}
 				}
 			}
 
@@ -1063,14 +1172,16 @@ Non-interactive mode (--non-interactive or BD_NON_INTERACTIVE=1):
 		// This prevents bd doctor from reporting "No last_import_time recorded in database"
 		// after init completes. Sets the metadata to current time in RFC3339 format.
 		// (mybd-9gw: sync divergence fix)
-		if err := store.SetMetadata(ctx, "last_import_time", time.Now().Format(time.RFC3339)); err != nil {
-			fmt.Fprintf(os.Stderr, "Warning: failed to initialize last_import_time: %v\n", err)
-			// Non-fatal - continue anyway
+		if !initProxiedServer {
+			if err := store.SetMetadata(ctx, "last_import_time", time.Now().Format(time.RFC3339)); err != nil {
+				fmt.Fprintf(os.Stderr, "Warning: failed to initialize last_import_time: %v\n", err)
+				// Non-fatal - continue anyway
+			}
 		}
 
 		// Import from local JSONL if requested (GH#2023).
 		// This must run after the store is created and prefix is set.
-		if fromJSONL {
+		if fromJSONL && !initProxiedServer {
 			localJSONLPath := filepath.Join(beadsDir, "issues.jsonl")
 			if _, statErr := os.Stat(localJSONLPath); os.IsNotExist(statErr) {
 				_ = store.Close()
@@ -1084,6 +1195,8 @@ Non-interactive mode (--non-interactive or BD_NON_INTERACTIVE=1):
 			if !quiet {
 				fmt.Printf("  Imported %d issues from %s\n", issueCount, localJSONLPath)
 			}
+		} else if fromJSONL && initProxiedServer {
+			FatalError("--from-jsonl is not yet supported in --proxied-server mode")
 		}
 
 		// Prompt for contributor mode if:
@@ -1091,7 +1204,10 @@ Non-interactive mode (--non-interactive or BD_NON_INTERACTIVE=1):
 		// - Interactive terminal (stdin is TTY) and not --non-interactive
 		// - No explicit --contributor or --team flag provided
 		// - No explicit --role flag provided
-		if isGitRepo() && !contributor && !team && roleFlag == "" && !nonInteractive && shouldPromptForRole() {
+		// In proxied-server mode the contributor / team wizards are skipped
+		// because they currently require a storage.DoltStorage; they'll move
+		// to the UoW pipeline along with BootstrapUseCase.
+		if !initProxiedServer && isGitRepo() && !contributor && !team && roleFlag == "" && !nonInteractive && shouldPromptForRole() {
 			promptedContributor, err := promptContributorMode()
 			if err != nil {
 				if isCanceled(err) {
@@ -1127,6 +1243,9 @@ Non-interactive mode (--non-interactive or BD_NON_INTERACTIVE=1):
 		}
 
 		// Run contributor wizard if --contributor flag is set or user chose contributor
+		if contributor && initProxiedServer {
+			FatalError("--contributor is not yet supported in --proxied-server mode")
+		}
 		if contributor {
 			if err := runContributorWizard(ctx, store); err != nil {
 				canceled := isCanceled(err)
@@ -1150,6 +1269,9 @@ Non-interactive mode (--non-interactive or BD_NON_INTERACTIVE=1):
 		}
 
 		// Run team wizard if --team flag is set
+		if team && initProxiedServer {
+			FatalError("--team is not yet supported in --proxied-server mode")
+		}
 		if team {
 			if err := runTeamWizard(ctx, store); err != nil {
 				canceled := isCanceled(err)
@@ -1182,15 +1304,25 @@ Non-interactive mode (--non-interactive or BD_NON_INTERACTIVE=1):
 
 		// Auto-commit Dolt state so bd doctor doesn't warn about uncommitted
 		// changes and users don't need a separate "bd vc commit" step.
-		if err := store.Commit(ctx, "bd init"); err != nil {
-			// Non-fatal: some setups (e.g. no tables yet) may have nothing to commit
-			if !strings.Contains(err.Error(), "nothing to commit") {
-				fmt.Fprintf(os.Stderr, "Warning: failed to commit initial state: %v\n", err)
+		if initProxiedServer {
+			if err := unitOfWork.Commit(ctx, "bd init"); err != nil {
+				// Non-fatal: with stub use cases the UoW makes no writes so a
+				// "nothing to commit" outcome is expected.
+				if !strings.Contains(err.Error(), "nothing to commit") {
+					fmt.Fprintf(os.Stderr, "Warning: failed to commit bootstrap UoW: %v\n", err)
+				}
 			}
-		}
+		} else {
+			if err := store.Commit(ctx, "bd init"); err != nil {
+				// Non-fatal: some setups (e.g. no tables yet) may have nothing to commit
+				if !strings.Contains(err.Error(), "nothing to commit") {
+					fmt.Fprintf(os.Stderr, "Warning: failed to commit initial state: %v\n", err)
+				}
+			}
 
-		if err := store.Close(); err != nil {
-			fmt.Fprintf(os.Stderr, "Warning: failed to close database: %v\n", err)
+			if err := store.Close(); err != nil {
+				fmt.Fprintf(os.Stderr, "Warning: failed to close database: %v\n", err)
+			}
 		}
 
 		// WARNING: DO NOT remove, delete, or modify files inside Dolt's .dolt/

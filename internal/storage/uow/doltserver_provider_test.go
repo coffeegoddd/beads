@@ -111,8 +111,11 @@ func TestNewDoltServerUOWProvider_HappyPath(t *testing.T) {
 
 	require.NoError(t, err)
 	require.NotNil(t, provider)
-	impl := provider.(*doltServerProvider)
-	t.Cleanup(func() { _ = impl.db.Close() })
+	t.Cleanup(func() {
+		if err := provider.Close(context.Background()); err != nil {
+			t.Logf("provider.Close: %v", err)
+		}
+	})
 }
 
 var (

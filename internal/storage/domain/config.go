@@ -32,3 +32,23 @@ type GlobalDatabaseParams struct{}
 type ImportResult struct{}
 
 type VerifyResult struct{}
+
+func NewConfigUseCase() ConfigUseCase {
+	return configUseCaseImpl{}
+}
+
+type configUseCaseImpl struct{}
+
+var _ ConfigUseCase = configUseCaseImpl{}
+
+func (configUseCaseImpl) ConfigureContributorMode(_ context.Context, _ ContributorModeParams) error {
+	return ErrUseCaseNotImplemented
+}
+
+func (configUseCaseImpl) ConfigureTeamMode(_ context.Context, _ TeamModeParams) error {
+	return ErrUseCaseNotImplemented
+}
+
+func (configUseCaseImpl) VerifyInit(_ context.Context) (VerifyResult, error) {
+	return VerifyResult{}, ErrUseCaseNotImplemented
+}

@@ -107,6 +107,10 @@ func (p *doltServerProvider) NewUOW(ctx context.Context) (UnitOfWork, error) {
 	return NewUOW(ctx, p)
 }
 
+func (p *doltServerProvider) Close(_ context.Context) error {
+	return p.db.Close()
+}
+
 func (p *doltServerProvider) NewTx(ctx context.Context) (Tx, error) {
 	conn, err := p.db.Conn(ctx)
 	if err != nil {
