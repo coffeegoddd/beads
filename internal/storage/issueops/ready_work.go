@@ -14,15 +14,12 @@ import (
 )
 
 // GetReadyWorkInTx returns issues that are ready to work on (not blocked).
-// computeBlockedFn is the caller's function for computing blocked IDs (since
-// the DoltStore and EmbeddedDoltStore have different caching strategies).
 //
 //nolint:gosec // G201: whereSQL/orderBySQL built from hardcoded strings and ? placeholders
 func GetReadyWorkInTx(
 	ctx context.Context,
 	tx *sql.Tx,
 	filter types.WorkFilter,
-	computeBlockedFn func(ctx context.Context, tx *sql.Tx, includeWisps bool) ([]string, error),
 ) ([]*types.Issue, error) {
 	// Status filtering: default to open OR in_progress.
 	var statusClause string
@@ -34,6 +31,7 @@ func GetReadyWorkInTx(
 	whereClauses := []string{
 		statusClause,
 		"(pinned = 0 OR pinned IS NULL)",
+		"is_blocked = 0",
 	}
 	if !filter.IncludeEphemeral {
 		whereClauses = append(whereClauses, "(ephemeral = 0 OR ephemeral IS NULL)")
@@ -159,33 +157,9 @@ func GetReadyWorkInTx(
 		}
 	}
 
-	// Exclude blocked issues eagerly for unbounded queries. Limited queries page
-	// candidate IDs first and filter blockers per page below, avoiding a full
-	// dependency graph scan when the caller only needs a small ready set.
-	if filter.Limit == 0 {
-		blockedIDs, err := computeBlockedFn(ctx, tx, true)
-		if err != nil {
-			return nil, fmt.Errorf("compute blocked IDs: %w", err)
-		}
-		if len(blockedIDs) > 0 {
-			// Also exclude children of blocked parents.
-			childrenOfBlocked, childErr := getChildrenOfIssuesInTx(ctx, tx, blockedIDs)
-			if childErr != nil {
-				return nil, fmt.Errorf("compute blocked children: %w", childErr)
-			}
-			blockedIDs = append(blockedIDs, childrenOfBlocked...)
-
-			for start := 0; start < len(blockedIDs); start += queryBatchSize {
-				end := start + queryBatchSize
-				if end > len(blockedIDs) {
-					end = len(blockedIDs)
-				}
-				placeholders, batchArgs := buildSQLInClause(blockedIDs[start:end])
-				args = append(args, batchArgs...)
-				whereClauses = append(whereClauses, fmt.Sprintf("id NOT IN (%s)", placeholders))
-			}
-		}
-	}
+	// `is_blocked = 0` is already in whereClauses (maintained by write-side
+	// instrumentation), so we no longer need to compute the blocked set
+	// recursively here.
 
 	whereSQL := "WHERE " + strings.Join(whereClauses, " AND ")
 
@@ -227,19 +201,8 @@ func GetReadyWorkInTx(
 				break
 			}
 
-			blockedPageIDs, err := ComputeBlockedCandidateIDsInTx(ctx, tx, pageIDs, true)
-			if err != nil {
-				return nil, fmt.Errorf("get ready work: filter blocked candidates: %w", err)
-			}
-			blockedPageSet := make(map[string]struct{}, len(blockedPageIDs))
-			for _, id := range blockedPageIDs {
-				blockedPageSet[id] = struct{}{}
-			}
-
+			// is_blocked = 0 is already applied in whereSQL.
 			for _, id := range pageIDs {
-				if _, blocked := blockedPageSet[id]; blocked {
-					continue
-				}
 				issueIDs = append(issueIDs, id)
 				if len(issueIDs) >= filter.Limit {
 					break
@@ -447,12 +410,33 @@ func filterReadyWispsInTx(ctx context.Context, tx *sql.Tx, filter types.WorkFilt
 		}
 	}
 
-	blockedIDs, err := ComputeBlockedCandidateIDsInTx(ctx, tx, wispIDs, true)
-	if err != nil {
-		return nil, fmt.Errorf("get ready work: filter blocked wisps: %w", err)
-	}
-	for _, id := range blockedIDs {
-		excluded[id] = struct{}{}
+	// Filter wisps that are currently is_blocked = 1 (maintained by write-side
+	// instrumentation).
+	for start := 0; start < len(wispIDs); start += queryBatchSize {
+		end := start + queryBatchSize
+		if end > len(wispIDs) {
+			end = len(wispIDs)
+		}
+		placeholders, args := buildSQLInClause(wispIDs[start:end])
+		//nolint:gosec // G201: only IN-clause placeholders are formatted in.
+		rows, err := tx.QueryContext(ctx, fmt.Sprintf(`
+			SELECT id FROM wisps WHERE id IN (%s) AND is_blocked = 1
+		`, placeholders), args...)
+		if err != nil {
+			return nil, fmt.Errorf("get ready work: filter blocked wisps: %w", err)
+		}
+		for rows.Next() {
+			var id string
+			if err := rows.Scan(&id); err != nil {
+				_ = rows.Close()
+				return nil, fmt.Errorf("scan blocked wisp: %w", err)
+			}
+			excluded[id] = struct{}{}
+		}
+		_ = rows.Close()
+		if err := rows.Err(); err != nil {
+			return nil, fmt.Errorf("blocked wisp rows: %w", err)
+		}
 	}
 
 	ready := wisps[:0]

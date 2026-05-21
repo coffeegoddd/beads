@@ -23,12 +23,14 @@ func (s *DoltStore) SearchIssues(ctx context.Context, query string, filter types
 
 // GetReadyWork returns issues that are ready to work on (not blocked).
 //
-// Blocking semantics are unified through issueops.GetReadyWorkInTx.
+// Blocking semantics are unified through issueops.GetReadyWorkInTx, which
+// consults the stored is_blocked column maintained by write-side
+// instrumentation.
 func (s *DoltStore) GetReadyWork(ctx context.Context, filter types.WorkFilter) ([]*types.Issue, error) {
 	var result []*types.Issue
 	err := s.withReadTx(ctx, func(tx *sql.Tx) error {
 		var err error
-		result, err = issueops.GetReadyWorkInTx(ctx, tx, filter, s.computeBlockedIDsForReadyWork)
+		result, err = issueops.GetReadyWorkInTx(ctx, tx, filter)
 		return err
 	})
 	return result, err
@@ -82,91 +84,25 @@ func (s *DoltStore) GetStatistics(ctx context.Context) (*types.Statistics, error
 		return nil, fmt.Errorf("failed to get statistics: %w", err)
 	}
 
-	// Blocked count: reuse computeBlockedIDs which caches the result across
-	// GetReadyWork and GetStatistics calls within the same CLI invocation.
+	// Blocked count: read directly from the stored is_blocked column.
 	var blockedCount int
-	blockedIDs, err := s.computeBlockedIDs(ctx, true)
-	if err == nil {
-		blockedCount = len(blockedIDs)
+	if err := s.withReadTx(ctx, func(tx *sql.Tx) error {
+		return tx.QueryRowContext(ctx, `
+			SELECT COUNT(*) FROM issues
+			WHERE is_blocked = 1 AND status <> 'closed' AND status <> 'pinned'
+		`).Scan(&blockedCount)
+	}); err != nil {
+		return nil, fmt.Errorf("failed to count blocked issues: %w", err)
 	}
 	stats.BlockedIssues = blockedCount
 
-	// Ready count: compute without using the ready_issues view to avoid
-	// recursive CTE join that triggers the same Dolt panic.
-	// Ready = open, non-ephemeral, not blocked (directly or transitively).
+	// Ready count: derive from open count minus blocked count.
 	stats.ReadyIssues = stats.OpenIssues - blockedCount
 	if stats.ReadyIssues < 0 {
 		stats.ReadyIssues = 0
 	}
 
 	return stats, nil
-}
-
-// computeBlockedIDs returns the set of issue IDs that are blocked by active issues.
-// Uses separate single-table queries with Go-level filtering to avoid Dolt's
-// joinIter panic (slice bounds out of range at join_iters.go:192).
-// Results are cached per DoltStore lifetime and invalidated when dependencies
-// change (AddDependency, RemoveDependency).
-//
-// When includeWisps is false, only the issues/dependencies tables are scanned,
-// skipping the wisps/wisp_dependencies tables. This is safe when the caller only
-// needs blocked status for non-ephemeral issues (no cross-table blocking deps exist).
-// A cached result from includeWisps=true satisfies includeWisps=false requests.
-//
-// Caller must hold s.mu (at least RLock).
-func (s *DoltStore) computeBlockedIDs(ctx context.Context, includeWisps bool) ([]string, error) {
-	var result []string
-	err := s.withReadTx(ctx, func(tx *sql.Tx) error {
-		var err error
-		result, err = s.computeBlockedIDsForReadyWork(ctx, tx, includeWisps)
-		return err
-	})
-	if err != nil {
-		return nil, err
-	}
-
-	return result, nil
-}
-
-func (s *DoltStore) computeBlockedIDsForReadyWork(ctx context.Context, tx *sql.Tx, includeWisps bool) ([]string, error) {
-	s.cacheMu.Lock()
-	if s.blockedIDsCached && (s.blockedIDsCacheIncludesWisps || !includeWisps) {
-		result := s.blockedIDsCache
-		s.cacheMu.Unlock()
-		return result, nil
-	}
-	s.cacheMu.Unlock()
-
-	result, _, err := issueops.ComputeBlockedIDsInTx(ctx, tx, includeWisps)
-	if err != nil {
-		return nil, err
-	}
-	blockedSet := make(map[string]bool, len(result))
-	for _, id := range result {
-		blockedSet[id] = true
-	}
-
-	s.cacheMu.Lock()
-	defer s.cacheMu.Unlock()
-	if s.blockedIDsCached && (s.blockedIDsCacheIncludesWisps || !includeWisps) {
-		return s.blockedIDsCache, nil
-	}
-	s.blockedIDsCache = result
-	s.blockedIDsCacheMap = blockedSet
-	s.blockedIDsCached = true
-	s.blockedIDsCacheIncludesWisps = includeWisps
-	return result, nil
-}
-
-// invalidateBlockedIDsCache clears the blocked IDs cache so the next call
-// to computeBlockedIDs will recompute from the database.
-func (s *DoltStore) invalidateBlockedIDsCache() {
-	s.cacheMu.Lock()
-	s.blockedIDsCached = false
-	s.blockedIDsCache = nil
-	s.blockedIDsCacheMap = nil
-	s.blockedIDsCacheIncludesWisps = false
-	s.cacheMu.Unlock()
 }
 
 // getChildrenWithParents returns a map of childID -> parentID for direct children
