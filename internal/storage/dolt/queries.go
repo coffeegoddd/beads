@@ -105,28 +105,6 @@ func (s *DoltStore) GetStatistics(ctx context.Context) (*types.Statistics, error
 	return stats, nil
 }
 
-// getChildrenWithParents returns a map of childID -> parentID for direct children
-// (parent-child deps) of the given parent IDs.
-func (s *DoltStore) getChildrenWithParents(ctx context.Context, parentIDs []string) (map[string]string, error) {
-	var result map[string]string
-	err := s.withReadTx(ctx, func(tx *sql.Tx) error {
-		var err error
-		result, err = issueops.GetChildrenWithParentsInTx(ctx, tx, parentIDs)
-		return err
-	})
-	return result, err
-}
-
-func (s *DoltStore) getDescendantIDs(ctx context.Context, rootID string) ([]string, error) {
-	var result []string
-	err := s.withReadTx(ctx, func(tx *sql.Tx) error {
-		var err error
-		result, err = issueops.GetDescendantIDsInTx(ctx, tx, rootID, 0)
-		return err
-	})
-	return result, err
-}
-
 // GetMoleculeProgress returns progress stats for a molecule
 func (s *DoltStore) GetMoleculeProgress(ctx context.Context, moleculeID string) (*types.MoleculeProgressStats, error) {
 	stats := &types.MoleculeProgressStats{

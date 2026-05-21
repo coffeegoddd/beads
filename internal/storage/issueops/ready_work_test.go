@@ -24,10 +24,6 @@ func deferredChildrenQueryRegex(depTable, issueTable string) string {
 	return `SELECT dep\.issue_id\s+FROM ` + depTable + ` dep\s+JOIN ` + issueTable + ` parent ON parent\.id = dep\.` + targetCol + `\s+WHERE dep\.type = 'parent-child'\s+AND parent\.defer_until IS NOT NULL\s+AND parent\.defer_until > UTC_TIMESTAMP\(\)`
 }
 
-func childrenOfIssuesQueryRegex(depTable string) string {
-	return `SELECT issue_id FROM ` + depTable + `\s+WHERE type = 'parent-child' AND COALESCE\(depends_on_issue_id, depends_on_wisp_id, depends_on_external\) IN \(\?\)`
-}
-
 func beginMockTx(t *testing.T) (*sql.DB, sqlmock.Sqlmock, *sql.Tx) {
 	t.Helper()
 
@@ -239,30 +235,6 @@ func TestGetChildrenOfDeferredParentsInTx_IgnoresMissingWispDependenciesTable(t 
 	want := []string{"child-from-dependencies-issues", "child-from-dependencies-wisps"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("children = %v, want %v", got, want)
-	}
-	if err := mock.ExpectationsWereMet(); err != nil {
-		t.Fatalf("unmet SQL expectations: %v", err)
-	}
-}
-
-func TestGetChildrenOfIssuesInTxPropagatesWispDependencyReadError(t *testing.T) {
-	t.Parallel()
-
-	_, mock, tx := beginMockTx(t)
-	readErr := errors.New("permission denied reading wisp_dependencies")
-	mock.ExpectQuery(childrenOfIssuesQueryRegex("dependencies")).
-		WithArgs("parent-id").
-		WillReturnRows(sqlmock.NewRows([]string{"issue_id"}))
-	mock.ExpectQuery(childrenOfIssuesQueryRegex("wisp_dependencies")).
-		WithArgs("parent-id").
-		WillReturnError(readErr)
-
-	_, err := getChildrenOfIssuesInTx(context.Background(), tx, []string{"parent-id"})
-	if err == nil {
-		t.Fatal("expected wisp_dependencies read error")
-	}
-	if !errors.Is(err, readErr) {
-		t.Fatalf("error = %v, want wrapped read error", err)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("unmet SQL expectations: %v", err)

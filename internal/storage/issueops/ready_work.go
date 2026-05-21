@@ -157,10 +157,6 @@ func GetReadyWorkInTx(
 		}
 	}
 
-	// `is_blocked = 0` is already in whereClauses (maintained by write-side
-	// instrumentation), so we no longer need to compute the blocked set
-	// recursively here.
-
 	whereSQL := "WHERE " + strings.Join(whereClauses, " AND ")
 
 	// Build ORDER BY clause based on SortPolicy.
@@ -181,50 +177,21 @@ func GetReadyWorkInTx(
 		orderBySQL = "ORDER BY priority ASC, created_at DESC, id ASC"
 	}
 
-	var issueIDs []string
+	var limitSQL string
 	if filter.Limit > 0 {
-		pageSize := readyWorkPageSize(filter.Limit)
-		for offset := 0; len(issueIDs) < filter.Limit; offset += pageSize {
-			//nolint:gosec // G201: whereSQL/orderBySQL are hardcoded, pageSize/offset are integers
-			query := fmt.Sprintf(`
-				SELECT id FROM issues
-				%s
-				%s
-				LIMIT %d OFFSET %d
-			`, whereSQL, orderBySQL, pageSize, offset)
+		limitSQL = fmt.Sprintf("LIMIT %d", filter.Limit)
+	}
+	//nolint:gosec // G201: whereSQL/orderBySQL are hardcoded strings and ? placeholders; limitSQL is an integer-built constant.
+	query := fmt.Sprintf(`
+		SELECT id FROM issues
+		%s
+		%s
+		%s
+	`, whereSQL, orderBySQL, limitSQL)
 
-			pageIDs, err := queryReadyIssueIDPage(ctx, tx, query, args)
-			if err != nil {
-				return nil, err
-			}
-			if len(pageIDs) == 0 {
-				break
-			}
-
-			// is_blocked = 0 is already applied in whereSQL.
-			for _, id := range pageIDs {
-				issueIDs = append(issueIDs, id)
-				if len(issueIDs) >= filter.Limit {
-					break
-				}
-			}
-			if len(pageIDs) < pageSize {
-				break
-			}
-		}
-	} else {
-		//nolint:gosec // G201: whereSQL/orderBySQL are hardcoded strings and ? placeholders
-		query := fmt.Sprintf(`
-			SELECT id FROM issues
-			%s
-			%s
-		`, whereSQL, orderBySQL)
-
-		var err error
-		issueIDs, err = queryReadyIssueIDPage(ctx, tx, query, args)
-		if err != nil {
-			return nil, err
-		}
+	issueIDs, err := queryReadyIssueIDPage(ctx, tx, query, args)
+	if err != nil {
+		return nil, err
 	}
 
 	// Batch-fetch full issues preserving order.
@@ -494,17 +461,6 @@ func issueCreatedBefore(a, b *types.Issue) bool {
 	return a.ID < b.ID
 }
 
-func readyWorkPageSize(limit int) int {
-	pageSize := limit * 4
-	if pageSize < 100 {
-		return 100
-	}
-	if pageSize > 1000 {
-		return 1000
-	}
-	return pageSize
-}
-
 func queryReadyIssueIDPage(ctx context.Context, tx *sql.Tx, query string, args []interface{}) ([]string, error) {
 	rows, err := tx.QueryContext(ctx, query, args...)
 	if err != nil {
@@ -638,52 +594,6 @@ func getParentedIDSetInTx(ctx context.Context, tx *sql.Tx, issueIDs []string) (m
 		}
 	}
 	return parented, nil
-}
-
-// getChildrenOfIssuesInTx returns IDs of direct children (parent-child deps)
-// of the given issue IDs. Scans both dependencies and wisp_dependencies tables.
-//
-//nolint:gosec // G201: depTable is hardcoded to "dependencies" or "wisp_dependencies"
-func getChildrenOfIssuesInTx(ctx context.Context, tx *sql.Tx, parentIDs []string) ([]string, error) {
-	if len(parentIDs) == 0 {
-		return nil, nil
-	}
-	var children []string
-	for _, depTable := range []string{"dependencies", "wisp_dependencies"} {
-		for start := 0; start < len(parentIDs); start += queryBatchSize {
-			end := start + queryBatchSize
-			if end > len(parentIDs) {
-				end = len(parentIDs)
-			}
-			placeholders, args := buildSQLInClause(parentIDs[start:end])
-
-			query := fmt.Sprintf(`
-				SELECT issue_id FROM %s
-				WHERE type = 'parent-child' AND %s IN (%s)
-			`, depTable, DepTargetExpr, placeholders)
-			rows, err := tx.QueryContext(ctx, query, args...)
-			if err != nil {
-				// wisp_dependencies table may not exist on pre-migration databases.
-				if optionalBlockedTable(depTable) && isTableNotExistError(err) {
-					break
-				}
-				return nil, fmt.Errorf("get children of issues from %s: %w", depTable, err)
-			}
-			for rows.Next() {
-				var childID string
-				if err := rows.Scan(&childID); err != nil {
-					_ = rows.Close()
-					return nil, fmt.Errorf("get children of issues: scan: %w", err)
-				}
-				children = append(children, childID)
-			}
-			_ = rows.Close()
-			if err := rows.Err(); err != nil {
-				return nil, fmt.Errorf("get children of issues: rows from %s: %w", depTable, err)
-			}
-		}
-	}
-	return children, nil
 }
 
 // buildSQLInClause builds a parameterized IN clause from a slice of IDs.
