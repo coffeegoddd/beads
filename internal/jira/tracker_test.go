@@ -581,6 +581,9 @@ func (s *configStore) GetIssuesByLabel(_ context.Context, _ string) ([]*types.Is
 func (s *configStore) GetReadyWork(_ context.Context, _ types.WorkFilter) ([]*types.Issue, error) {
 	return nil, nil
 }
+func (s *configStore) GetReadyWorkWithCounts(_ context.Context, _ types.WorkFilter) ([]*types.IssueWithCounts, error) {
+	return nil, nil
+}
 func (s *configStore) GetBlockedIssues(_ context.Context, _ types.WorkFilter) ([]*types.BlockedIssue, error) {
 	return nil, nil
 }

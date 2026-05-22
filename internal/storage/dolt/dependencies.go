@@ -308,10 +308,6 @@ func (s *DoltStore) IsBlocked(ctx context.Context, issueID string) (bool, []stri
 }
 
 // GetNewlyUnblockedByClose finds issues that become unblocked when an issue is closed.
-//
-// Rewritten from a single query with nested JOIN + correlated NOT EXISTS to two
-// sequential queries to avoid Dolt query-planner issues with nested JOIN subqueries.
-// See bd-o23 / hq-g4nxe for the SQL audit that identified this pattern.
 func (s *DoltStore) GetNewlyUnblockedByClose(ctx context.Context, closedIssueID string) ([]*types.Issue, error) {
 	var result []*types.Issue
 	err := s.withReadTx(ctx, func(tx *sql.Tx) error {

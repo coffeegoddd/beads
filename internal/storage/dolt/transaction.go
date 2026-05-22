@@ -329,7 +329,6 @@ func (t *doltTransaction) SearchIssues(ctx context.Context, query string, filter
 		whereClauses = append(whereClauses, fmt.Sprintf("status NOT IN (%s)", strings.Join(placeholders, ",")))
 	}
 
-	// Type filtering — use subquery to prevent Dolt mergeJoinIter panic
 	if len(filter.ExcludeTypes) > 0 {
 		placeholders := make([]string, len(filter.ExcludeTypes))
 		for i, tp := range filter.ExcludeTypes {
@@ -354,7 +353,6 @@ func (t *doltTransaction) SearchIssues(ctx context.Context, query string, filter
 		args = append(args, *filter.PriorityMax)
 	}
 
-	// Issue type — use subquery to prevent Dolt mergeJoinIter panic
 	if filter.IssueType != nil {
 		//nolint:gosec // G201: table is hardcoded to "issues" or "wisps"
 		whereClauses = append(whereClauses, fmt.Sprintf("id IN (SELECT id FROM %s WHERE issue_type = ?)", table))

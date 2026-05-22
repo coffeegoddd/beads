@@ -468,8 +468,6 @@ func loadStatusByIDInTx(ctx context.Context, tx *sql.Tx, ids []string) (map[stri
 // GetNewlyUnblockedByCloseInTx finds issues that become unblocked when the
 // given issue is closed. Works within an existing transaction.
 // Returns full issue objects for the newly-unblocked issues.
-// Uses separate single-table queries (no JOINs) to avoid Dolt's mergeJoinKvIter
-// panic when joining across tables with different tuple formats.
 //
 //nolint:gosec // G201: table names come from hardcoded constants
 func GetNewlyUnblockedByCloseInTx(ctx context.Context, tx *sql.Tx, closedIssueID string) ([]*types.Issue, error) {

@@ -67,6 +67,11 @@ type Storage interface {
 
 	// Work queries
 	GetReadyWork(ctx context.Context, filter types.WorkFilter) ([]*types.Issue, error)
+	// GetReadyWorkWithCounts returns ready issues with labels, dependency
+	// records, dep/dependent/comment counts and parent ID hydrated in a
+	// single SQL statement. Use for bd ready --json. Wisps (if any) are
+	// merged in via the slower per-call hydration path.
+	GetReadyWorkWithCounts(ctx context.Context, filter types.WorkFilter) ([]*types.IssueWithCounts, error)
 	GetBlockedIssues(ctx context.Context, filter types.WorkFilter) ([]*types.BlockedIssue, error)
 	GetEpicsEligibleForClosure(ctx context.Context) ([]*types.EpicStatus, error)
 

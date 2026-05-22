@@ -701,6 +701,19 @@ func TestGetReadyWork_IncludeEphemeralPropagatesWispSearchError(t *testing.T) {
 	}, "tester"); err != nil {
 		t.Fatalf("create ready issue: %v", err)
 	}
+	// Insert a wisp first so the wisp-empty short-circuit in
+	// getReadyWispsInTx does not skip the search. We damage the table
+	// after the row exists so the probe still finds it.
+	if err := store.CreateIssue(ctx, &types.Issue{
+		ID:        "rw-wisp-error-wisp",
+		Title:     "Wisp control",
+		Status:    types.StatusOpen,
+		Priority:  1,
+		IssueType: types.TypeTask,
+		Ephemeral: true,
+	}, "tester"); err != nil {
+		t.Fatalf("create wisp: %v", err)
+	}
 	if _, err := store.db.ExecContext(ctx, "ALTER TABLE wisps DROP COLUMN title"); err != nil {
 		t.Fatalf("damage wisps table for regression test: %v", err)
 	}

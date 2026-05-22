@@ -36,11 +36,21 @@ func (s *DoltStore) GetReadyWork(ctx context.Context, filter types.WorkFilter) (
 	return result, err
 }
 
+// GetReadyWorkWithCounts returns ready issues with labels, dependency records,
+// dep/dependent/comment counts and parent ID hydrated in one SQL statement
+// (plus the wisp-empty probe). Used by bd ready --json to avoid the 5-call
+// per-issue hydration the legacy path would otherwise issue.
+func (s *DoltStore) GetReadyWorkWithCounts(ctx context.Context, filter types.WorkFilter) ([]*types.IssueWithCounts, error) {
+	var result []*types.IssueWithCounts
+	err := s.withReadTx(ctx, func(tx *sql.Tx) error {
+		var err error
+		result, err = issueops.GetReadyWorkWithCountsInTx(ctx, tx, filter)
+		return err
+	})
+	return result, err
+}
+
 // GetBlockedIssues returns issues that are blocked by other issues.
-// Uses separate single-table queries with Go-level filtering to avoid
-// correlated EXISTS subqueries that trigger Dolt's joinIter panic
-// (slice bounds out of range at join_iters.go:192).
-// Same fix pattern as GetStatistics blocked count (fc16065c, a4a21958).
 func (s *DoltStore) GetBlockedIssues(ctx context.Context, filter types.WorkFilter) ([]*types.BlockedIssue, error) {
 	var result []*types.BlockedIssue
 	err := s.withReadTx(ctx, func(tx *sql.Tx) error {
@@ -128,9 +138,6 @@ func (s *DoltStore) GetMoleculeProgress(ctx context.Context, moleculeID string) 
 	if err == nil && title.Valid {
 		stats.MoleculeTitle = title.String
 	}
-
-	// Use separate single-table queries to avoid Dolt's joinIter panic
-	// (join_iters.go:192) which triggers on JOIN between issues and dependencies.
 
 	// Step 1: Get child issue IDs from dependencies table (single-table scan)
 	//nolint:gosec // G201: depTable and parentCol are hardcoded
