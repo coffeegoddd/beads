@@ -142,16 +142,22 @@ func ensureProxiedServerConfig(beadsDir string) (string, error) {
 	return path, nil
 }
 
+// Validators below emit source-neutral errors. Callers wrap with whichever
+// label is meaningful at their site: CLI callers prepend the flag name
+// (e.g. "--proxied-server-config"); runtime callers (uow factory, etc.)
+// prepend whatever label fits — the path may have come from env var or
+// the proxied_server_client_info.json sidecar, not necessarily a flag.
+
 func validateProxiedServerConfig(path string) error {
 	info, err := os.Stat(path)
 	if err != nil {
-		return fmt.Errorf("--proxied-server-config %s: %w", path, err)
+		return fmt.Errorf("%s: %w", path, err)
 	}
 	if !info.Mode().IsRegular() {
-		return fmt.Errorf("--proxied-server-config %s: not a regular file", path)
+		return fmt.Errorf("%s: not a regular file", path)
 	}
 	if _, err := servercfg.YamlConfigFromFile(filesys.LocalFS, path); err != nil {
-		return fmt.Errorf("--proxied-server-config %s: parse: %w", path, err)
+		return fmt.Errorf("%s: parse: %w", path, err)
 	}
 	return nil
 }
@@ -160,10 +166,10 @@ func validateProxiedServerRootPath(path string) error {
 	switch info, err := os.Stat(path); {
 	case err == nil:
 		if !info.IsDir() {
-			return fmt.Errorf("--proxied-server-root-path %s: not a directory", path)
+			return fmt.Errorf("%s: not a directory", path)
 		}
 	case !os.IsNotExist(err):
-		return fmt.Errorf("--proxied-server-root-path %s: %w", path, err)
+		return fmt.Errorf("%s: %w", path, err)
 	}
 	return nil
 }
@@ -172,18 +178,18 @@ func validateProxiedServerLogPath(path string) error {
 	parent := filepath.Dir(path)
 	parentInfo, err := os.Stat(parent)
 	if err != nil {
-		return fmt.Errorf("--proxied-server-log-path %s: parent directory: %w", path, err)
+		return fmt.Errorf("%s: parent directory: %w", path, err)
 	}
 	if !parentInfo.IsDir() {
-		return fmt.Errorf("--proxied-server-log-path %s: parent %s is not a directory", path, parent)
+		return fmt.Errorf("%s: parent %s is not a directory", path, parent)
 	}
 	switch info, err := os.Stat(path); {
 	case err == nil:
 		if !info.Mode().IsRegular() {
-			return fmt.Errorf("--proxied-server-log-path %s: not a regular file", path)
+			return fmt.Errorf("%s: not a regular file", path)
 		}
 	case !os.IsNotExist(err):
-		return fmt.Errorf("--proxied-server-log-path %s: %w", path, err)
+		return fmt.Errorf("%s: %w", path, err)
 	}
 	return nil
 }

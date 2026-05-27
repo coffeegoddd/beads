@@ -343,16 +343,22 @@ func TestValidateProxiedServerLogPath(t *testing.T) {
 }
 
 // TestValidateProxiedServerConfig covers the standalone validator that
-// init.go uses for early --proxied-server-config validation.
+// init.go uses for early proxied-server-config validation.
+//
+// The validator deliberately emits source-neutral errors (just the path)
+// because the value may come from a CLI flag, BEADS_PROXIED_SERVER_CONFIG,
+// or the proxied_server_client_info.json sidecar. Callers prepend their
+// own label.
 func TestValidateProxiedServerConfig(t *testing.T) {
 	t.Run("valid YAML passes", func(t *testing.T) {
 		path := writeValidServerYAML(t, filepath.Join(t.TempDir(), "ok.yaml"))
 		require.NoError(t, validateProxiedServerConfig(path))
 	})
-	t.Run("missing path errors", func(t *testing.T) {
-		err := validateProxiedServerConfig(filepath.Join(t.TempDir(), "nope.yaml"))
+	t.Run("missing path errors with the path in the message", func(t *testing.T) {
+		missing := filepath.Join(t.TempDir(), "nope.yaml")
+		err := validateProxiedServerConfig(missing)
 		require.Error(t, err)
-		assert.Contains(t, err.Error(), "--proxied-server-config")
+		assert.Contains(t, err.Error(), missing)
 	})
 	t.Run("directory rejected", func(t *testing.T) {
 		err := validateProxiedServerConfig(t.TempDir())

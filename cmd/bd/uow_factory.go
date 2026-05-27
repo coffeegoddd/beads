@@ -31,7 +31,7 @@ func newProxiedServerUOWProvider(ctx context.Context, beadsDir string) (uow.Unit
 		return nil, fmt.Errorf("newProxiedServerUOWProvider: resolve root path: %w", err)
 	}
 	if err := validateProxiedServerRootPath(rootPath); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("newProxiedServerUOWProvider: proxied server root (from env or %s): %w", configfile.ProxiedServerClientInfoFileName, err)
 	}
 
 	configPath, err := ensureProxiedServerConfig(beadsDir)
@@ -45,7 +45,7 @@ func newProxiedServerUOWProvider(ctx context.Context, beadsDir string) (uow.Unit
 	}
 	if isCustomLog {
 		if err := validateProxiedServerLogPath(logPath); err != nil {
-			return nil, err
+			return nil, fmt.Errorf("newProxiedServerUOWProvider: proxied server log (from env or %s): %w", configfile.ProxiedServerClientInfoFileName, err)
 		}
 	}
 
