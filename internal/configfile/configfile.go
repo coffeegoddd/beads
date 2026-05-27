@@ -34,10 +34,6 @@ type Config struct {
 	DoltServerTLS      bool   `json:"dolt_server_tls,omitempty"`      // Enable TLS for server connections (required for Hosted Dolt)
 	DoltDataDir        string `json:"dolt_data_dir,omitempty"`        // Custom dolt data directory (absolute path; default: .beads/dolt)
 	DoltRemotesAPIPort int    `json:"dolt_remotesapi_port,omitempty"` // Dolt remotesapi port for federation (default: 8080)
-	// Proxied-server client paths (root path, server config, server log) now
-	// live in .beads/proxied_server_client_info.json — see proxied_server_client_info.go.
-	// They moved out of metadata.json because they are inherently machine-local
-	// (absolute paths must not travel through git).
 	// Note: Password should be set via BEADS_DOLT_PASSWORD env var for security
 
 	// Project identity — unique ID generated at bd init time.

@@ -34,9 +34,6 @@ func proxiedServerLogPath(beadsDir string) string {
 	return filepath.Join(proxiedServerRoot(beadsDir), proxiedServerLogName)
 }
 
-// envOrAbsJoin returns the env var value as an absolute path. Relative values
-// are joined against beadsDir; absolute values are returned as-is; missing
-// or empty values return "".
 func envOrAbsJoin(envName, beadsDir string) string {
 	p := os.Getenv(envName)
 	if p == "" {

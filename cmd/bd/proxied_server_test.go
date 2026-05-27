@@ -77,16 +77,11 @@ func TestInitCommandRegistersServerConfigFlag(t *testing.T) {
 	assert.Equal(t, "", flag.DefValue, "--proxied-server-config should default to empty")
 }
 
-// writeProxiedClientInfo writes the sidecar at .beads/proxied_server_client_info.json.
-// Used by tests to set up the same state that bd init produces.
 func writeProxiedClientInfo(t *testing.T, beadsDir string, info *configfile.ProxiedServerClientInfo) {
 	t.Helper()
 	require.NoError(t, configfile.SaveProxiedServerClientInfo(beadsDir, info))
 }
 
-// TestResolveProxiedServerConfigPath covers the env > sidecar-field >
-// default chain. Field values in the sidecar may be absolute (returned as-is)
-// or relative (joined against beadsDir).
 func TestResolveProxiedServerConfigPath(t *testing.T) {
 	t.Run("no sidecar, no env, returns default and !isCustom", func(t *testing.T) {
 		t.Setenv("BEADS_PROXIED_SERVER_CONFIG", "")
@@ -536,9 +531,6 @@ func TestResolveProxiedServerRootPath(t *testing.T) {
 	t.Run("corrupt sidecar surfaces error", func(t *testing.T) {
 		t.Setenv("BEADS_PROXIED_SERVER_ROOT_PATH", "")
 		bd := t.TempDir()
-		// Write invalid JSON directly to where the sidecar lives — this should
-		// fail loudly rather than silently fall back to defaults (regression
-		// guard for the original ignored-error bug).
 		require.NoError(t, os.WriteFile(
 			configfile.ProxiedServerClientInfoPath(bd),
 			[]byte("not json{"),

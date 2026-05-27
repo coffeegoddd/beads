@@ -498,10 +498,6 @@ func TestDoltProxiedServerMode(t *testing.T) {
 	})
 }
 
-// TestProxiedServerClientInfo_RoundTrip locks down the sidecar I/O: values
-// written to .beads/proxied_server_client_info.json must come back intact,
-// including absolute paths (which is the whole point of moving these fields
-// out of metadata.json — they're machine-local, not git-portable).
 func TestProxiedServerClientInfo_RoundTrip(t *testing.T) {
 	dir := t.TempDir()
 
@@ -534,9 +530,6 @@ func TestProxiedServerClientInfo_RoundTrip(t *testing.T) {
 	})
 }
 
-// TestProxiedServerClientInfo_ResolvedPaths verifies the resolver methods
-// absolutize relative entries against beadsDir and return absolute entries
-// as-is.
 func TestProxiedServerClientInfo_ResolvedPaths(t *testing.T) {
 	beadsDir := "/home/user/project/.beads"
 

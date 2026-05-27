@@ -36,7 +36,6 @@ push-state.json
 # Local version tracking (prevents upgrade notification spam after git ops)
 .local_version
 
-# Proxied-server client info (machine-local paths for the dolt sql-server proxy)
 proxied_server_client_info.json
 
 # Worktree redirect file (contains relative path to main repo's .beads/)

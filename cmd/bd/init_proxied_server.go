@@ -252,11 +252,6 @@ func composeProxiedServerMetadataJSON(in proxiedMetadataInputs) ([]byte, error) 
 	return json.MarshalIndent(cfg, "", "  ")
 }
 
-// buildProxiedServerClientInfo absolutizes the three --proxied-server-* flag
-// values and returns a sidecar payload, or nil if none of the flags were set.
-// Inputs may be relative (resolved against cwd) or absolute; the persisted
-// sidecar always holds absolute paths so subsequent bd invocations resolve
-// the same locations regardless of cwd.
 func buildProxiedServerClientInfo(rootPath, configPath, logPath string) (*configfile.ProxiedServerClientInfo, error) {
 	if rootPath == "" && configPath == "" && logPath == "" {
 		return nil, nil
