@@ -69,12 +69,12 @@ func TestInitCommandRegistersProxiedServerFlag(t *testing.T) {
 	assert.Equal(t, "false", flag.DefValue, "--proxied-server should default to false")
 }
 
-// TestInitCommandRegistersServerConfigFlag verifies the --proxied-server-config flag
+// TestInitCommandRegistersServerConfigFlag verifies the --proxied-server-config-path flag
 // is wired into initCmd.
 func TestInitCommandRegistersServerConfigFlag(t *testing.T) {
-	flag := initCmd.Flags().Lookup("proxied-server-config")
-	require.NotNil(t, flag, "init command does not register --proxied-server-config")
-	assert.Equal(t, "", flag.DefValue, "--proxied-server-config should default to empty")
+	flag := initCmd.Flags().Lookup("proxied-server-config-path")
+	require.NotNil(t, flag, "init command does not register --proxied-server-config-path")
+	assert.Equal(t, "", flag.DefValue, "--proxied-server-config-path should default to empty")
 }
 
 func writeProxiedClientInfo(t *testing.T, beadsDir string, info *configfile.ProxiedServerClientInfo) {
@@ -343,7 +343,7 @@ func TestValidateProxiedServerLogPath(t *testing.T) {
 }
 
 // TestValidateProxiedServerConfig covers the standalone validator that
-// init.go uses for early proxied-server-config validation.
+// init.go uses for early proxied-server-config-path validation.
 //
 // The validator deliberately emits source-neutral errors (just the path)
 // because the value may come from a CLI flag, BEADS_PROXIED_SERVER_CONFIG,

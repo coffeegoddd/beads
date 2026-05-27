@@ -116,7 +116,7 @@ func runInitProxiedServer(cmd *cobra.Command, ctx context.Context, in initProxie
 	}
 	configYAMLBody := renderInitConfigYAML("", false)
 
-	clientInfo, err := buildProxiedServerClientInfo(beadsDir, in.serverRootPath, in.serverConfigPath, in.serverLogPath)
+	clientInfo, err := buildProxiedServerClientInfo(in.serverRootPath, in.serverConfigPath, in.serverLogPath)
 	if err != nil {
 		FatalError("%v", err)
 	}
@@ -252,26 +252,35 @@ func composeProxiedServerMetadataJSON(in proxiedMetadataInputs) ([]byte, error) 
 	return json.MarshalIndent(cfg, "", "  ")
 }
 
-func buildProxiedServerClientInfo(beadsDir, rootPath, configPath, logPath string) (*configfile.ProxiedServerClientInfo, error) {
+func buildProxiedServerClientInfo(rootPath, configPath, logPath string) (*configfile.ProxiedServerClientInfo, error) {
 	if rootPath == "" && configPath == "" && logPath == "" {
 		return nil, nil
 	}
-	if beadsDir == "" {
-		return nil, fmt.Errorf("buildProxiedServerClientInfo: beadsDir must be set")
-	}
-	abs := func(p string) string {
+	clean := func(p string) (string, error) {
 		if p == "" {
-			return ""
+			return "", nil
 		}
-		if filepath.IsAbs(p) {
-			return filepath.Clean(p)
+		if !filepath.IsAbs(p) {
+			return "", fmt.Errorf("buildProxiedServerClientInfo: path %q is not absolute", p)
 		}
-		return filepath.Join(beadsDir, p)
+		return filepath.Clean(p), nil
+	}
+	rootAbs, err := clean(rootPath)
+	if err != nil {
+		return nil, err
+	}
+	configAbs, err := clean(configPath)
+	if err != nil {
+		return nil, err
+	}
+	logAbs, err := clean(logPath)
+	if err != nil {
+		return nil, err
 	}
 	return &configfile.ProxiedServerClientInfo{
-		RootPath:   abs(rootPath),
-		ConfigPath: abs(configPath),
-		LogPath:    abs(logPath),
+		RootPath:   rootAbs,
+		ConfigPath: configAbs,
+		LogPath:    logAbs,
 	}, nil
 }
 

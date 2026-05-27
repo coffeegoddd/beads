@@ -144,7 +144,7 @@ func ensureProxiedServerConfig(beadsDir string) (string, error) {
 
 // Validators below emit source-neutral errors. Callers wrap with whichever
 // label is meaningful at their site: CLI callers prepend the flag name
-// (e.g. "--proxied-server-config"); runtime callers (uow factory, etc.)
+// (e.g. "--proxied-server-config-path"); runtime callers (uow factory, etc.)
 // prepend whatever label fits — the path may have come from env var or
 // the proxied_server_client_info.json sidecar, not necessarily a flag.
 
