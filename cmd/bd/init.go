@@ -111,12 +111,12 @@ Non-interactive mode (--non-interactive or BD_NON_INTERACTIVE=1):
 		if os.Getenv("BEADS_DOLT_PROXIED_SERVER") == "1" {
 			initProxiedServer = true
 		}
-		if initProxiedServer {
-			// Proxied-server mode has no local Dolt init lifecycle yet. When it
-			// is implemented, that path must mark any local .dolt/ it creates or
-			// acknowledges with doltserver.MarkDoltDirCompatible.
-			FatalError("--proxied-server is not yet implemented")
-		}
+		// if initProxiedServer {
+		// 	// Proxied-server mode has no local Dolt init lifecycle yet. When it
+		// 	// is implemented, that path must mark any local .dolt/ it creates or
+		// 	// acknowledges with doltserver.MarkDoltDirCompatible.
+		// 	FatalError("--proxied-server is not yet implemented")
+		// }
 		if initProxiedServer && initServerMode {
 			FatalError("--server and --proxied-server are mutually exclusive")
 		}
@@ -1065,17 +1065,6 @@ Non-interactive mode (--non-interactive or BD_NON_INTERACTIVE=1):
 					}
 				}
 
-				if usesProxiedServer() {
-					if serverConfigPath != "" {
-						cfg.DoltProxiedServerConfig = serverConfigPath
-					}
-					if serverLogPath != "" {
-						cfg.DoltProxiedServerLog = serverLogPath
-					}
-					if serverRootPath != "" {
-						cfg.DoltProxiedServerRootPath = serverRootPath
-					}
-				}
 			}
 
 			if err := cfg.Save(beadsDir); err != nil {
@@ -1706,7 +1695,10 @@ func checkExistingBeadsDataAt(beadsDir string, prefix string) error {
 
 	if cfg, err := configfile.Load(beadsDir); err == nil && cfg != nil && cfg.GetBackend() == configfile.BackendDolt {
 		if cfg.IsDoltProxiedServerMode() {
-			proxiedRoot := resolveProxiedServerRootPath(beadsDir, cfg)
+			proxiedRoot, rootErr := resolveProxiedServerRootPath(beadsDir)
+			if rootErr != nil {
+				return fmt.Errorf("resolve proxied server root: %w", rootErr)
+			}
 			if info, statErr := os.Stat(proxiedRoot); statErr == nil && info.IsDir() {
 				return fmt.Errorf(`
 %s Found existing Dolt database: %s

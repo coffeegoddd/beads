@@ -108,22 +108,25 @@ func runInitProxiedServer(cmd *cobra.Command, ctx context.Context, in initProxie
 	}
 
 	metadataBody, err := composeProxiedServerMetadataJSON(proxiedMetadataInputs{
-		dbName:           dbName,
-		projectID:        projectID,
-		serverConfigPath: in.serverConfigPath,
-		serverLogPath:    in.serverLogPath,
-		serverRootPath:   in.serverRootPath,
+		dbName:    dbName,
+		projectID: projectID,
 	})
 	if err != nil {
 		FatalError("composing metadata.json: %v", err)
 	}
 	configYAMLBody := renderInitConfigYAML("", false)
 
+	clientInfo, err := buildProxiedServerClientInfo(in.serverRootPath, in.serverConfigPath, in.serverLogPath)
+	if err != nil {
+		FatalError("%v", err)
+	}
+
 	fsParams := domain.InitializeBeadsDirParams{
-		MetadataJSONBody:      metadataBody,
-		ConfigYAMLBody:        configYAMLBody,
-		SetNoCOW:              true,
-		WriteProjectGitignore: useLocalBeads && beadsDirIsLocal,
+		MetadataJSONBody:        metadataBody,
+		ConfigYAMLBody:          configYAMLBody,
+		ProxiedServerClientInfo: clientInfo,
+		SetNoCOW:                true,
+		WriteProjectGitignore:   useLocalBeads && beadsDirIsLocal,
 	}
 	if useLocalBeads {
 		fsParams.LocalVersion = Version
@@ -230,11 +233,8 @@ func resolveProxiedInitRemoteURL(ctx context.Context, gitUC domain.GitUseCase, i
 }
 
 type proxiedMetadataInputs struct {
-	dbName           string
-	projectID        string
-	serverConfigPath string
-	serverLogPath    string
-	serverRootPath   string
+	dbName    string
+	projectID string
 }
 
 func composeProxiedServerMetadataJSON(in proxiedMetadataInputs) ([]byte, error) {
@@ -245,24 +245,49 @@ func composeProxiedServerMetadataJSON(in proxiedMetadataInputs) ([]byte, error) 
 	cfg.DoltMode = configfile.DoltModeProxiedServer
 	cfg.ProjectID = in.projectID
 
-	cfg.DoltProxiedServerConfig = in.serverConfigPath
-	cfg.DoltProxiedServerLog = in.serverLogPath
-	cfg.DoltProxiedServerRootPath = in.serverRootPath
-
 	if filepath.IsAbs(cfg.DoltDataDir) {
 		cfg.DoltDataDir = ""
 	}
-	if filepath.IsAbs(cfg.DoltProxiedServerConfig) {
-		cfg.DoltProxiedServerConfig = ""
-	}
-	if filepath.IsAbs(cfg.DoltProxiedServerLog) {
-		cfg.DoltProxiedServerLog = ""
-	}
-	if filepath.IsAbs(cfg.DoltProxiedServerRootPath) {
-		cfg.DoltProxiedServerRootPath = ""
-	}
 
 	return json.MarshalIndent(cfg, "", "  ")
+}
+
+// buildProxiedServerClientInfo absolutizes the three --proxied-server-* flag
+// values and returns a sidecar payload, or nil if none of the flags were set.
+// Inputs may be relative (resolved against cwd) or absolute; the persisted
+// sidecar always holds absolute paths so subsequent bd invocations resolve
+// the same locations regardless of cwd.
+func buildProxiedServerClientInfo(rootPath, configPath, logPath string) (*configfile.ProxiedServerClientInfo, error) {
+	if rootPath == "" && configPath == "" && logPath == "" {
+		return nil, nil
+	}
+	abs := func(p string) (string, error) {
+		if p == "" {
+			return "", nil
+		}
+		out, err := filepath.Abs(p)
+		if err != nil {
+			return "", fmt.Errorf("resolving %s to absolute path: %w", p, err)
+		}
+		return out, nil
+	}
+	rootAbs, err := abs(rootPath)
+	if err != nil {
+		return nil, err
+	}
+	configAbs, err := abs(configPath)
+	if err != nil {
+		return nil, err
+	}
+	logAbs, err := abs(logPath)
+	if err != nil {
+		return nil, err
+	}
+	return &configfile.ProxiedServerClientInfo{
+		RootPath:   rootAbs,
+		ConfigPath: configAbs,
+		LogPath:    logAbs,
+	}, nil
 }
 
 type runInitTailContext struct {

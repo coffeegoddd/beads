@@ -34,40 +34,75 @@ func proxiedServerLogPath(beadsDir string) string {
 	return filepath.Join(proxiedServerRoot(beadsDir), proxiedServerLogName)
 }
 
-func resolveProxiedServerRootPath(beadsDir string, cfg *configfile.Config) string {
-	if cfg == nil {
-		cfg = &configfile.Config{}
+// envOrAbsJoin returns the env var value as an absolute path. Relative values
+// are joined against beadsDir; absolute values are returned as-is; missing
+// or empty values return "".
+func envOrAbsJoin(envName, beadsDir string) string {
+	p := os.Getenv(envName)
+	if p == "" {
+		return ""
 	}
-	if custom := cfg.GetDoltProxiedServerRootPath(beadsDir); custom != "" {
-		return custom
+	if filepath.IsAbs(p) {
+		return p
 	}
-	return proxiedServerRoot(beadsDir)
+	return filepath.Join(beadsDir, p)
 }
 
-func resolveProxiedServerConfigPath(beadsDir string, cfg *configfile.Config) (path string, isCustom bool) {
-	if cfg == nil {
-		cfg = &configfile.Config{}
+func resolveProxiedServerRootPath(beadsDir string) (string, error) {
+	if p := envOrAbsJoin("BEADS_PROXIED_SERVER_ROOT_PATH", beadsDir); p != "" {
+		return p, nil
 	}
-	if custom := cfg.GetDoltProxiedServerConfig(beadsDir); custom != "" {
-		return custom, true
+	info, err := configfile.LoadProxiedServerClientInfo(beadsDir)
+	if err != nil {
+		return "", err
 	}
-	root := resolveProxiedServerRootPath(beadsDir, cfg)
-	return filepath.Join(root, proxiedServerConfigName), false
+	if p := info.ResolvedRootPath(beadsDir); p != "" {
+		return p, nil
+	}
+	return proxiedServerRoot(beadsDir), nil
 }
 
-func resolveProxiedServerLogPath(beadsDir string, cfg *configfile.Config) (path string, isCustom bool) {
-	if cfg == nil {
-		cfg = &configfile.Config{}
+func resolveProxiedServerConfigPath(beadsDir string) (path string, isCustom bool, err error) {
+	if p := envOrAbsJoin("BEADS_PROXIED_SERVER_CONFIG", beadsDir); p != "" {
+		return p, true, nil
 	}
-	if custom := cfg.GetDoltProxiedServerLog(beadsDir); custom != "" {
-		return custom, true
+	info, err := configfile.LoadProxiedServerClientInfo(beadsDir)
+	if err != nil {
+		return "", false, err
 	}
-	root := resolveProxiedServerRootPath(beadsDir, cfg)
-	return filepath.Join(root, proxiedServerLogName), false
+	if p := info.ResolvedConfigPath(beadsDir); p != "" {
+		return p, true, nil
+	}
+	root, err := resolveProxiedServerRootPath(beadsDir)
+	if err != nil {
+		return "", false, err
+	}
+	return filepath.Join(root, proxiedServerConfigName), false, nil
 }
 
-func ensureProxiedServerConfig(beadsDir string, cfg *configfile.Config) (string, error) {
-	path, isCustom := resolveProxiedServerConfigPath(beadsDir, cfg)
+func resolveProxiedServerLogPath(beadsDir string) (path string, isCustom bool, err error) {
+	if p := envOrAbsJoin("BEADS_PROXIED_SERVER_LOG", beadsDir); p != "" {
+		return p, true, nil
+	}
+	info, err := configfile.LoadProxiedServerClientInfo(beadsDir)
+	if err != nil {
+		return "", false, err
+	}
+	if p := info.ResolvedLogPath(beadsDir); p != "" {
+		return p, true, nil
+	}
+	root, err := resolveProxiedServerRootPath(beadsDir)
+	if err != nil {
+		return "", false, err
+	}
+	return filepath.Join(root, proxiedServerLogName), false, nil
+}
+
+func ensureProxiedServerConfig(beadsDir string) (string, error) {
+	path, isCustom, err := resolveProxiedServerConfigPath(beadsDir)
+	if err != nil {
+		return "", err
+	}
 
 	if isCustom {
 		info, err := os.Stat(path)
