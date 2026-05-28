@@ -5,9 +5,9 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strings"
 	"testing"
-	"time"
+
+	"github.com/steveyegge/beads/internal/storage"
 )
 
 // skipIfNoDolt skips the test if the dolt CLI is not installed. Under
@@ -76,14 +76,21 @@ func initDoltRemote(t *testing.T, dir string) string {
 		t.Fatalf("dolt remote add failed: %v\n%s", err, out)
 	}
 
-	// Push to create the remote storage
-	cmd = exec.Command("dolt", "push", "origin", "main")
+	// Push to create the remote storage via SQL (CALL DOLT_PUSH).
+	cmd = exec.Command("dolt", "sql", "-q", "CALL DOLT_PUSH('origin', 'main')")
 	cmd.Dir = srcDir
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("dolt push failed: %v\n%s", err, out)
 	}
 
 	return remoteURL
+}
+
+// nopOpener satisfies StoreOpener for tests that exercise only cold-start
+// behavior (clone). Tests that actually invoke push/pull live at the cmd
+// layer where a real opener is available.
+var nopOpener StoreOpener = func(_ context.Context, _ string) (storage.DoltStorage, error) {
+	panic("nopOpener should not be invoked in cold-start tests")
 }
 
 func TestEnsureColdStart(t *testing.T) {
@@ -94,7 +101,7 @@ func TestEnsureColdStart(t *testing.T) {
 	remoteURL := initDoltRemote(t, filepath.Join(tmpDir, "remote"))
 
 	cache := &Cache{Dir: filepath.Join(tmpDir, "cache")}
-	entryDir, err := cache.Ensure(ctx, remoteURL)
+	entryDir, err := cache.Ensure(ctx, remoteURL, nopOpener)
 	if err != nil {
 		t.Fatalf("Ensure (cold) failed: %v", err)
 	}
@@ -120,33 +127,6 @@ func TestEnsureColdStart(t *testing.T) {
 	}
 }
 
-func TestEnsureWarmStart(t *testing.T) {
-	skipIfNoDolt(t)
-	ctx := context.Background()
-
-	tmpDir := t.TempDir()
-	remoteURL := initDoltRemote(t, filepath.Join(tmpDir, "remote"))
-
-	cache := &Cache{Dir: filepath.Join(tmpDir, "cache")}
-
-	// Cold start
-	if _, err := cache.Ensure(ctx, remoteURL); err != nil {
-		t.Fatalf("Ensure (cold) failed: %v", err)
-	}
-
-	firstMeta := cache.readMeta(remoteURL)
-
-	// Warm start (should pull, not clone)
-	if _, err := cache.Ensure(ctx, remoteURL); err != nil {
-		t.Fatalf("Ensure (warm) failed: %v", err)
-	}
-
-	secondMeta := cache.readMeta(remoteURL)
-	if secondMeta.LastPull <= firstMeta.LastPull {
-		t.Error("LastPull should update on warm start")
-	}
-}
-
 func TestEvict(t *testing.T) {
 	skipIfNoDolt(t)
 	ctx := context.Background()
@@ -155,7 +135,7 @@ func TestEvict(t *testing.T) {
 	remoteURL := initDoltRemote(t, filepath.Join(tmpDir, "remote"))
 
 	cache := &Cache{Dir: filepath.Join(tmpDir, "cache")}
-	if _, err := cache.Ensure(ctx, remoteURL); err != nil {
+	if _, err := cache.Ensure(ctx, remoteURL, nopOpener); err != nil {
 		t.Fatalf("Ensure failed: %v", err)
 	}
 
@@ -172,110 +152,6 @@ func TestEvict(t *testing.T) {
 	// Verify gone
 	if cache.doltExists(cache.cloneTarget(remoteURL)) {
 		t.Error("expected cache entry to be gone after eviction")
-	}
-}
-
-func TestPush(t *testing.T) {
-	skipIfNoDolt(t)
-	ctx := context.Background()
-
-	tmpDir := t.TempDir()
-	remoteURL := initDoltRemote(t, filepath.Join(tmpDir, "remote"))
-
-	cache := &Cache{Dir: filepath.Join(tmpDir, "cache")}
-
-	// Clone the remote
-	if _, err := cache.Ensure(ctx, remoteURL); err != nil {
-		t.Fatalf("Ensure failed: %v", err)
-	}
-
-	// Make a local change in the cached clone
-	target := cache.cloneTarget(remoteURL)
-	cmd := exec.Command("dolt", "sql", "-q", "INSERT INTO test_table VALUES (1, 'pushed')")
-	cmd.Dir = target
-	if out, err := cmd.CombinedOutput(); err != nil {
-		t.Fatalf("insert failed: %v\n%s", err, out)
-	}
-
-	cmd = exec.Command("dolt", "add", ".")
-	cmd.Dir = target
-	if out, err := cmd.CombinedOutput(); err != nil {
-		t.Fatalf("dolt add failed: %v\n%s", err, out)
-	}
-
-	cmd = exec.Command("dolt", "commit", "-m", "add row")
-	cmd.Dir = target
-	if out, err := cmd.CombinedOutput(); err != nil {
-		t.Fatalf("dolt commit failed: %v\n%s", err, out)
-	}
-
-	// Push back to remote
-	if err := cache.Push(ctx, remoteURL); err != nil {
-		t.Fatalf("Push failed: %v", err)
-	}
-
-	// Verify push timestamp was recorded
-	meta := cache.readMeta(remoteURL)
-	if meta.LastPush == 0 {
-		t.Error("meta.LastPush should be set after Push")
-	}
-
-	// Verify the data made it to the remote by cloning into a fresh dir
-	verifyDir := filepath.Join(tmpDir, "verify")
-	cmd = exec.Command("dolt", "clone", remoteURL, verifyDir)
-	if out, err := cmd.CombinedOutput(); err != nil {
-		t.Fatalf("verification clone failed: %v\n%s", err, out)
-	}
-
-	cmd = exec.Command("dolt", "sql", "-q", "SELECT name FROM test_table WHERE id = 1", "-r", "csv")
-	cmd.Dir = verifyDir
-	out, err := cmd.Output()
-	if err != nil {
-		t.Fatalf("verification query failed: %v", err)
-	}
-	if !strings.Contains(string(out), "pushed") {
-		t.Errorf("expected 'pushed' in verification output, got: %s", out)
-	}
-}
-
-func TestEnsureFreshFor(t *testing.T) {
-	skipIfNoDolt(t)
-	ctx := context.Background()
-
-	tmpDir := t.TempDir()
-	remoteURL := initDoltRemote(t, filepath.Join(tmpDir, "remote"))
-
-	cache := &Cache{
-		Dir:      filepath.Join(tmpDir, "cache"),
-		FreshFor: 1 * time.Hour, // very long TTL so second call skips pull
-	}
-
-	// Cold start (always clones)
-	if _, err := cache.Ensure(ctx, remoteURL); err != nil {
-		t.Fatalf("Ensure (cold) failed: %v", err)
-	}
-
-	firstMeta := cache.readMeta(remoteURL)
-
-	// Second call should skip pull because of FreshFor
-	if _, err := cache.Ensure(ctx, remoteURL); err != nil {
-		t.Fatalf("Ensure (warm, fresh) failed: %v", err)
-	}
-
-	secondMeta := cache.readMeta(remoteURL)
-	if secondMeta.LastPull != firstMeta.LastPull {
-		t.Error("LastPull should NOT update when cache is still fresh")
-	}
-
-	// With FreshFor=0, should always pull
-	cache.FreshFor = 0
-	if _, err := cache.Ensure(ctx, remoteURL); err != nil {
-		t.Fatalf("Ensure (warm, FreshFor=0) failed: %v", err)
-	}
-
-	thirdMeta := cache.readMeta(remoteURL)
-	if thirdMeta.LastPull <= firstMeta.LastPull {
-		t.Error("LastPull should update when FreshFor=0")
 	}
 }
 

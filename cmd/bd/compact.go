@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"time"
 
@@ -807,10 +806,14 @@ func runCompactDolt() {
 		return
 	}
 
-	// Check if dolt command is available
-	if _, err := exec.LookPath("dolt"); err != nil {
-		fmt.Fprintf(os.Stderr, "Error: dolt command not found in PATH\n")
-		fmt.Fprintf(os.Stderr, "Hint: install Dolt from https://github.com/dolthub/dolt\n")
+	store := getStore()
+	if store == nil {
+		fmt.Fprintf(os.Stderr, "Error: no store available\n")
+		os.Exit(1)
+	}
+	gc, ok := storage.UnwrapStore(store).(storage.GarbageCollector)
+	if !ok {
+		fmt.Fprintf(os.Stderr, "Error: storage backend does not support Dolt GC\n")
 		os.Exit(1)
 	}
 
@@ -818,15 +821,8 @@ func runCompactDolt() {
 		fmt.Printf("Running Dolt garbage collection...\n")
 	}
 
-	// Run dolt gc
-	cmd := exec.Command("dolt", "gc") // #nosec G204 -- fixed command, no user input
-	cmd.Dir = doltPath
-	output, err := cmd.CombinedOutput()
-	if err != nil {
+	if err := gc.DoltGC(context.Background()); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: dolt gc failed: %v\n", err)
-		if len(output) > 0 {
-			fmt.Fprintf(os.Stderr, "Output: %s\n", string(output))
-		}
 		os.Exit(1)
 	}
 

@@ -258,7 +258,7 @@ Also triggers Dolt push/pull if a remote is configured.`,
 					fmt.Fprintf(os.Stderr, "Warning: failed to init cache for %s: %v\n", repoPath, err)
 					continue
 				}
-				if _, err = cache.Ensure(ctx, repoPath); err != nil {
+				if _, err = cache.Ensure(ctx, repoPath, newDoltStoreFromConfig); err != nil {
 					fmt.Fprintf(os.Stderr, "Warning: failed to sync remote %s: %v\n", repoPath, err)
 					continue
 				}

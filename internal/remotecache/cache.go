@@ -76,10 +76,13 @@ func (c *Cache) lockPath(remoteURL string) string {
 // Ensure clones the remote if not cached (cold start), or pulls if already
 // cached (warm start). Returns the cache entry directory path.
 //
+// Cold-start clone uses the dolt CLI; warm-start pull uses storage.RemoteStore.Pull
+// via the provided opener.
+//
 // Auth credentials are inherited from environment variables:
 // DOLT_REMOTE_USER, DOLT_REMOTE_PASSWORD, or DoltHub credentials
 // configured via `dolt creds`.
-func (c *Cache) Ensure(ctx context.Context, remoteURL string) (string, error) {
+func (c *Cache) Ensure(ctx context.Context, remoteURL string, opener StoreOpener) (string, error) {
 	if err := ValidateRemoteURL(remoteURL); err != nil {
 		return "", fmt.Errorf("invalid remote URL: %w", err)
 	}
@@ -111,11 +114,11 @@ func (c *Cache) Ensure(ctx context.Context, remoteURL string) (string, error) {
 				return entry, nil
 			}
 		}
-		if err := c.doltPull(ctx, target); err != nil {
-			return "", fmt.Errorf("dolt pull failed for %s: %w", remoteURL, err)
+		if err := c.pullViaStore(ctx, remoteURL, opener); err != nil {
+			return "", fmt.Errorf("pull failed for %s: %w", remoteURL, err)
 		}
 	} else {
-		// Cold start: clone
+		// Cold start: clone via CLI (no local store exists yet)
 		if err := c.doltClone(ctx, remoteURL, target); err != nil {
 			return "", fmt.Errorf("dolt clone failed for %s: %w", remoteURL, err)
 		}
@@ -131,8 +134,9 @@ func (c *Cache) Ensure(ctx context.Context, remoteURL string) (string, error) {
 	return entry, nil
 }
 
-// Push pushes local commits in the cached clone back to the remote.
-func (c *Cache) Push(ctx context.Context, remoteURL string) error {
+// Push pushes local commits in the cached clone back to the remote via
+// storage.RemoteStore.Push.
+func (c *Cache) Push(ctx context.Context, remoteURL string, opener StoreOpener) error {
 	target := c.cloneTarget(remoteURL)
 	if !c.doltExists(target) {
 		return fmt.Errorf("no cached clone for %s", remoteURL)
@@ -144,10 +148,14 @@ func (c *Cache) Push(ctx context.Context, remoteURL string) error {
 	}
 	defer c.releaseLock(lock)
 
-	cmd := exec.CommandContext(ctx, "dolt", "push", "origin", "main")
-	cmd.Dir = target
-	if output, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("dolt push failed: %w\nOutput: %s", err, output)
+	store, err := opener(ctx, c.entryDir(remoteURL))
+	if err != nil {
+		return fmt.Errorf("open cached store: %w", err)
+	}
+	defer store.Close()
+
+	if err := store.Push(ctx); err != nil {
+		return fmt.Errorf("push: %w", err)
 	}
 
 	// Update push timestamp
@@ -196,12 +204,16 @@ func (c *Cache) doltClone(ctx context.Context, remoteURL, target string) error {
 	return nil
 }
 
-// doltPull pulls from origin in the given database directory.
-func (c *Cache) doltPull(ctx context.Context, dbDir string) error {
-	cmd := exec.CommandContext(ctx, "dolt", "pull", "origin", "main")
-	cmd.Dir = dbDir
-	if output, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("%w\nOutput: %s", err, output)
+// pullViaStore opens a storage.RemoteStore against the cached clone and calls
+// Pull(). The store is opened and closed locally for the duration of the pull.
+func (c *Cache) pullViaStore(ctx context.Context, remoteURL string, opener StoreOpener) error {
+	store, err := opener(ctx, c.entryDir(remoteURL))
+	if err != nil {
+		return fmt.Errorf("open cached store: %w", err)
+	}
+	defer store.Close()
+	if err := store.Pull(ctx); err != nil {
+		return fmt.Errorf("pull: %w", err)
 	}
 	return nil
 }

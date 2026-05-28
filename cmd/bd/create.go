@@ -382,7 +382,7 @@ var createCmd = &cobra.Command{
 				if err != nil {
 					FatalError("failed to initialize remote cache: %v", err)
 				}
-				if _, err := remoteCache.Ensure(rootCtx, repoPath); err != nil {
+				if _, err := remoteCache.Ensure(rootCtx, repoPath, newDoltStoreFromConfig); err != nil {
 					FatalError("failed to sync remote %s: %v", repoPath, err)
 				}
 				targetStore, err = remoteCache.OpenStore(rootCtx, repoPath, newDoltStoreFromConfig)
@@ -715,7 +715,7 @@ var createCmd = &cobra.Command{
 		// Done explicitly (not via defer) because FatalError calls os.Exit,
 		// which skips deferred functions.
 		if remoteCache != nil {
-			if pushErr := remoteCache.Push(rootCtx, repoPath); pushErr != nil {
+			if pushErr := remoteCache.Push(rootCtx, repoPath, newDoltStoreFromConfig); pushErr != nil {
 				FatalError("failed to push to %s: %v\nThe issue was created locally but not synced to the remote.", repoPath, pushErr)
 			}
 		}
