@@ -67,4 +67,3 @@ WHERE depends_on_external IS NOT NULL;
 
 DROP VIEW IF EXISTS ready_issues;
 DROP VIEW IF EXISTS blocked_issues;
-

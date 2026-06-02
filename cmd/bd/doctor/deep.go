@@ -140,8 +140,8 @@ func checkParentConsistency(db *sql.DB) DoctorCheck {
 		FROM (` + doctorDependencyUnionSQL() + `) d
 		WHERE d.type = 'parent-child'
 		  AND (
-		    (d.dep_table = 'dependencies' AND NOT EXISTS (SELECT 1 FROM issues WHERE id = d.issue_id))
-		    OR (d.dep_table = 'wisp_dependencies' AND NOT EXISTS (SELECT 1 FROM wisps WHERE id = d.issue_id))
+		    (d.dep_table LIKE 'issue_%' AND NOT EXISTS (SELECT 1 FROM issues WHERE id = d.issue_id))
+		    OR (d.dep_table LIKE 'wisp_%' AND NOT EXISTS (SELECT 1 FROM wisps WHERE id = d.issue_id))
 		    OR (
 		      NOT EXISTS (SELECT 1 FROM issues WHERE id = d.depends_on_id)
 		      AND NOT EXISTS (SELECT 1 FROM wisps WHERE id = d.depends_on_id)
@@ -198,8 +198,8 @@ func checkDependencyIntegrity(db *sql.DB) DoctorCheck {
 		SELECT d.issue_id, d.depends_on_id, d.type
 		FROM (` + doctorDependencyUnionSQL() + `) d
 		WHERE (
-		    (d.dep_table = 'dependencies' AND NOT EXISTS (SELECT 1 FROM issues WHERE id = d.issue_id))
-		    OR (d.dep_table = 'wisp_dependencies' AND NOT EXISTS (SELECT 1 FROM wisps WHERE id = d.issue_id))
+		    (d.dep_table LIKE 'issue_%' AND NOT EXISTS (SELECT 1 FROM issues WHERE id = d.issue_id))
+		    OR (d.dep_table LIKE 'wisp_%' AND NOT EXISTS (SELECT 1 FROM wisps WHERE id = d.issue_id))
 		    OR (
 		      d.depends_on_id NOT LIKE 'external:%'
 		      AND NOT EXISTS (SELECT 1 FROM issues WHERE id = d.depends_on_id)

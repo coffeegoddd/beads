@@ -142,16 +142,22 @@ func (r *dependencySQLRepositoryImpl) HasCycle(ctx context.Context, issueID, dep
 		return false, errors.New("db: DependencySQLRepository.HasCycle: issueID and dependsOnID must not be empty")
 	}
 
+	localTables := []struct{ table, col string }{
+		{"issue_issue_dependencies", "depends_on_issue_id"},
+		{"wisp_issue_dependencies", "depends_on_issue_id"},
+		{"issue_wisp_dependencies", "depends_on_wisp_id"},
+		{"wisp_wisp_dependencies", "depends_on_wisp_id"},
+	}
+
 	var one int
-	directTables := []string{"issue_issue_dependencies", "wisp_issue_dependencies"}
-	for _, t := range directTables {
-		//nolint:gosec // G201: t is a hardcoded constant
+	for _, lt := range localTables {
+		//nolint:gosec // G201: lt.table and lt.col are hardcoded constants
 		err := r.runner.QueryRowContext(ctx, fmt.Sprintf(`
 			SELECT 1 FROM %s
-			WHERE source_id = ? AND depends_on_issue_id = ?
+			WHERE source_id = ? AND %s = ?
 			  AND type IN ('blocks', 'conditional-blocks')
 			LIMIT 1
-		`, t), dependsOnID, issueID).Scan(&one)
+		`, lt.table, lt.col), dependsOnID, issueID).Scan(&one)
 		switch {
 		case err == nil:
 			return true, nil
@@ -159,17 +165,13 @@ func (r *dependencySQLRepositoryImpl) HasCycle(ctx context.Context, issueID, dep
 			if dberrors.IsTableNotExist(err) {
 				continue
 			}
-			return false, fmt.Errorf("db: DependencySQLRepository.HasCycle: direct probe (%s): %w", t, err)
+			return false, fmt.Errorf("db: DependencySQLRepository.HasCycle: direct probe (%s): %w", lt.table, err)
 		}
 	}
 
-	allTables := []string{
-		"issue_issue_dependencies",
-		"wisp_issue_dependencies",
-	}
-	unionParts := make([]string, 0, len(allTables))
-	for _, t := range allTables {
-		unionParts = append(unionParts, fmt.Sprintf("SELECT source_id, depends_on_issue_id, type FROM %s", t))
+	unionParts := make([]string, 0, len(localTables))
+	for _, lt := range localTables {
+		unionParts = append(unionParts, fmt.Sprintf("SELECT source_id, %s AS target_id, type FROM %s", lt.col, lt.table))
 	}
 	var count int
 	//nolint:gosec // G201: union built from hardcoded table list
@@ -177,12 +179,12 @@ func (r *dependencySQLRepositoryImpl) HasCycle(ctx context.Context, issueID, dep
 		WITH RECURSIVE reachable(node) AS (
 			SELECT ?
 			UNION
-			SELECT d.depends_on_issue_id FROM (
+			SELECT d.target_id FROM (
 				%s
 			) d
 			JOIN reachable r ON d.source_id = r.node
 			WHERE d.type IN ('blocks', 'conditional-blocks')
-			  AND d.depends_on_issue_id IS NOT NULL
+			  AND d.target_id IS NOT NULL
 		)
 		SELECT COUNT(*) FROM reachable WHERE node = ?
 	`, strings.Join(unionParts, " UNION ALL ")), dependsOnID, issueID).Scan(&count)
