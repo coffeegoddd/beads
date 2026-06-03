@@ -130,6 +130,15 @@ type GraphApplyResult struct {
 	IDs map[string]string
 }
 
+type UpdateIssueParams struct {
+	Fields           map[string]any
+	MergeMetadata    json.RawMessage
+	SetMetadata      []string
+	UnsetMetadata    []string
+	AppendNotes      *string
+	ClearDeferStatus bool
+}
+
 type IssueUseCase interface {
 	GetIssue(ctx context.Context, id string) (*types.Issue, error)
 	GetIssuesByIDs(ctx context.Context, ids []string) ([]*types.Issue, error)
@@ -142,11 +151,12 @@ type IssueUseCase interface {
 
 	CreateIssue(ctx context.Context, params CreateIssueParams, actor string) (CreateIssueResult, error)
 	CreateIssues(ctx context.Context, params []CreateIssueParams, actor string) (CreateIssuesResult, error)
-	UpdateIssue(ctx context.Context, id string, updates map[string]any, actor string) error
+	UpdateIssue(ctx context.Context, id string, params UpdateIssueParams, actor string) (*types.Issue, error)
 	CloseIssue(ctx context.Context, id, reason, actor, session string) error
 	DeleteIssue(ctx context.Context, id string) error
 	DeleteIssues(ctx context.Context, ids []string, force, dryRun bool) (*types.DeleteIssuesResult, error)
 	ClaimIssue(ctx context.Context, id, actor string) error
+	Reparent(ctx context.Context, childID, newParentID, actor string) error
 	ApplyIssueGraph(ctx context.Context, plan GraphPlan, actor string) (GraphApplyResult, error)
 
 	GetWisp(ctx context.Context, id string) (*types.Issue, error)
@@ -154,7 +164,7 @@ type IssueUseCase interface {
 	ListWisps(ctx context.Context, filter types.IssueFilter, proj ListProjection) (ListResult, error)
 	CreateWisp(ctx context.Context, params CreateIssueParams, actor string) (CreateIssueResult, error)
 	CreateWisps(ctx context.Context, params []CreateIssueParams, actor string) (CreateIssuesResult, error)
-	UpdateWisp(ctx context.Context, id string, updates map[string]any, actor string) error
+	UpdateWisp(ctx context.Context, id string, params UpdateIssueParams, actor string) (*types.Issue, error)
 	ApplyWispGraph(ctx context.Context, plan GraphPlan, actor string) (GraphApplyResult, error)
 }
 
@@ -225,22 +235,21 @@ func (u *issueUseCaseImpl) getByIDs(ctx context.Context, ids []string, useWisp b
 	return out, nil
 }
 
-func (u *issueUseCaseImpl) UpdateIssue(ctx context.Context, id string, updates map[string]any, actor string) error {
-	return u.update(ctx, id, updates, actor, false)
+func (u *issueUseCaseImpl) UpdateIssue(ctx context.Context, id string, params UpdateIssueParams, actor string) (*types.Issue, error) {
+	return u.update(ctx, id, params, actor, false)
 }
 
-func (u *issueUseCaseImpl) UpdateWisp(ctx context.Context, id string, updates map[string]any, actor string) error {
-	return u.update(ctx, id, updates, actor, true)
+func (u *issueUseCaseImpl) UpdateWisp(ctx context.Context, id string, params UpdateIssueParams, actor string) (*types.Issue, error) {
+	return u.update(ctx, id, params, actor, true)
 }
 
-func (u *issueUseCaseImpl) update(ctx context.Context, id string, updates map[string]any, actor string, useWisp bool) error {
-	if id == "" {
-		return fmt.Errorf("update: id must not be empty")
-	}
-	if len(updates) == 0 {
-		return nil
-	}
-	return u.issueRepo.Update(ctx, id, updates, actor, IssueTableOpts{UseWispsTable: useWisp})
+func (u *issueUseCaseImpl) update(ctx context.Context, id string, params UpdateIssueParams, actor string, useWisp bool) (*types.Issue, error) {
+	_ = ctx
+	_ = id
+	_ = params
+	_ = actor
+	_ = useWisp
+	return nil, fmt.Errorf("UpdateIssue: not implemented")
 }
 
 func (u *issueUseCaseImpl) CloseIssue(ctx context.Context, id, reason, actor, session string) error {
@@ -269,6 +278,14 @@ func (u *issueUseCaseImpl) ClaimIssue(ctx context.Context, id, actor string) err
 		return fmt.Errorf("ClaimIssue: id must not be empty")
 	}
 	return u.issueRepo.Claim(ctx, id, actor, IssueTableOpts{})
+}
+
+func (u *issueUseCaseImpl) Reparent(ctx context.Context, childID, newParentID, actor string) error {
+	_ = ctx
+	_ = childID
+	_ = newParentID
+	_ = actor
+	return fmt.Errorf("Reparent: not implemented")
 }
 
 func (u *issueUseCaseImpl) ListIssues(ctx context.Context, filter types.IssueFilter, proj ListProjection) (ListResult, error) {

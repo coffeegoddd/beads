@@ -19,6 +19,7 @@ type LabelSQLRepository interface {
 type LabelUseCase interface {
 	AddLabel(ctx context.Context, issueID, label, actor string) error
 	RemoveLabel(ctx context.Context, issueID, label, actor string) error
+	SetLabels(ctx context.Context, issueID string, labels []string, actor string) error
 	GetLabels(ctx context.Context, issueID string) ([]string, error)
 	GetLabelsForIssues(ctx context.Context, issueIDs []string) (map[string][]string, error)
 	InheritFromParent(ctx context.Context, childID, parentID, actor string, skipExisting []string) ([]string, error)
@@ -68,6 +69,14 @@ func (u *labelUseCaseImpl) RemoveLabel(ctx context.Context, issueID, label, acto
 		return fmt.Errorf("RemoveLabel: label must not be empty")
 	}
 	return u.labelRepo.Remove(ctx, issueID, label, actor, LabelOpts{})
+}
+
+func (u *labelUseCaseImpl) SetLabels(ctx context.Context, issueID string, labels []string, actor string) error {
+	_ = ctx
+	_ = issueID
+	_ = labels
+	_ = actor
+	return fmt.Errorf("SetLabels: not implemented")
 }
 
 func (u *labelUseCaseImpl) GetLabels(ctx context.Context, issueID string) ([]string, error) {
