@@ -11,12 +11,14 @@ type LabelOpts struct {
 
 type LabelSQLRepository interface {
 	Insert(ctx context.Context, issueID, label, actor string, opts LabelOpts) error
+	Remove(ctx context.Context, issueID, label, actor string, opts LabelOpts) error
 	List(ctx context.Context, issueID string, opts LabelOpts) ([]string, error)
 	ListByIssueIDs(ctx context.Context, issueIDs []string, opts LabelOpts) (map[string][]string, error)
 }
 
 type LabelUseCase interface {
 	AddLabel(ctx context.Context, issueID, label, actor string) error
+	RemoveLabel(ctx context.Context, issueID, label, actor string) error
 	GetLabels(ctx context.Context, issueID string) ([]string, error)
 	GetLabelsForIssues(ctx context.Context, issueIDs []string) (map[string][]string, error)
 	InheritFromParent(ctx context.Context, childID, parentID, actor string, skipExisting []string) ([]string, error)
@@ -56,6 +58,16 @@ func (u *labelUseCaseImpl) add(ctx context.Context, id, label, actor string, use
 		return fmt.Errorf("add label %s/%s: %w", id, label, err)
 	}
 	return nil
+}
+
+func (u *labelUseCaseImpl) RemoveLabel(ctx context.Context, issueID, label, actor string) error {
+	if issueID == "" {
+		return fmt.Errorf("RemoveLabel: issueID must not be empty")
+	}
+	if label == "" {
+		return fmt.Errorf("RemoveLabel: label must not be empty")
+	}
+	return u.labelRepo.Remove(ctx, issueID, label, actor, LabelOpts{})
 }
 
 func (u *labelUseCaseImpl) GetLabels(ctx context.Context, issueID string) ([]string, error) {

@@ -54,14 +54,30 @@ type DependencySQLRepository interface {
 
 	GetBlockingInfo(ctx context.Context, issueIDs []string, opts DepListOpts) (BlockingInfo, error)
 	GetBlockingInfoAcrossIssuesAndWisps(ctx context.Context, issueIDs []string) (BlockingInfo, error)
+
+	Remove(ctx context.Context, issueID, dependsOnID, actor string, opts DepInsertOpts) error
+	ListRecordsForIssue(ctx context.Context, issueID string, opts DepListOpts) ([]*types.Dependency, error)
+	ListIssuesDependedOn(ctx context.Context, issueID string, opts DepListOpts) ([]*types.Issue, error)
+	ListIssueDependents(ctx context.Context, issueID string, opts DepListOpts) ([]*types.Issue, error)
+	ListDependentsWithMetadata(ctx context.Context, issueID string, opts DepListOpts) ([]*types.IssueWithDependencyMetadata, error)
+	IsBlocked(ctx context.Context, issueID string, opts DepListOpts) (bool, []string, error)
+	ListNewlyUnblockedByClose(ctx context.Context, closedIssueID string, opts DepListOpts) ([]*types.Issue, error)
 }
 
 type DependencyUseCase interface {
 	AddDependency(ctx context.Context, dep *types.Dependency, actor string) error
+	RemoveDependency(ctx context.Context, issueID, dependsOnID, actor string) error
 	ListByIssueIDs(ctx context.Context, issueIDs []string, filter DepListFilter) (DepBulkResult, error)
 	CountsByIssueIDs(ctx context.Context, issueIDs []string) (map[string]*types.DependencyCounts, error)
 	GetBlockingInfo(ctx context.Context, issueIDs []string) (BlockingInfo, error)
 	GetForIssueIDs(ctx context.Context, ids []string) (map[string][]*types.Dependency, error)
+
+	GetDependencies(ctx context.Context, issueID string) ([]*types.Issue, error)
+	GetDependents(ctx context.Context, issueID string) ([]*types.Issue, error)
+	GetDependencyRecords(ctx context.Context, issueID string) ([]*types.Dependency, error)
+	GetDependentsWithMetadata(ctx context.Context, issueID string) ([]*types.IssueWithDependencyMetadata, error)
+	IsBlocked(ctx context.Context, issueID string) (bool, []string, error)
+	GetNewlyUnblockedByClose(ctx context.Context, closedIssueID string) ([]*types.Issue, error)
 
 	AddWispDependency(ctx context.Context, dep *types.Dependency, actor string) error
 	ListByWispIDs(ctx context.Context, wispIDs []string, filter DepListFilter) (DepBulkResult, error)
@@ -190,6 +206,55 @@ func (u *dependencyUseCaseImpl) GetBlockingInfo(ctx context.Context, issueIDs []
 		return BlockingInfo{}, fmt.Errorf("GetBlockingInfo: %w", err)
 	}
 	return out, nil
+}
+
+func (u *dependencyUseCaseImpl) RemoveDependency(ctx context.Context, issueID, dependsOnID, actor string) error {
+	if issueID == "" || dependsOnID == "" {
+		return fmt.Errorf("RemoveDependency: issueID and dependsOnID must not be empty")
+	}
+	return u.depRepo.Remove(ctx, issueID, dependsOnID, actor, DepInsertOpts{})
+}
+
+func (u *dependencyUseCaseImpl) GetDependencies(ctx context.Context, issueID string) ([]*types.Issue, error) {
+	if issueID == "" {
+		return nil, fmt.Errorf("GetDependencies: issueID must not be empty")
+	}
+	return u.depRepo.ListIssuesDependedOn(ctx, issueID, DepListOpts{})
+}
+
+func (u *dependencyUseCaseImpl) GetDependents(ctx context.Context, issueID string) ([]*types.Issue, error) {
+	if issueID == "" {
+		return nil, fmt.Errorf("GetDependents: issueID must not be empty")
+	}
+	return u.depRepo.ListIssueDependents(ctx, issueID, DepListOpts{})
+}
+
+func (u *dependencyUseCaseImpl) GetDependencyRecords(ctx context.Context, issueID string) ([]*types.Dependency, error) {
+	if issueID == "" {
+		return nil, fmt.Errorf("GetDependencyRecords: issueID must not be empty")
+	}
+	return u.depRepo.ListRecordsForIssue(ctx, issueID, DepListOpts{})
+}
+
+func (u *dependencyUseCaseImpl) GetDependentsWithMetadata(ctx context.Context, issueID string) ([]*types.IssueWithDependencyMetadata, error) {
+	if issueID == "" {
+		return nil, fmt.Errorf("GetDependentsWithMetadata: issueID must not be empty")
+	}
+	return u.depRepo.ListDependentsWithMetadata(ctx, issueID, DepListOpts{})
+}
+
+func (u *dependencyUseCaseImpl) IsBlocked(ctx context.Context, issueID string) (bool, []string, error) {
+	if issueID == "" {
+		return false, nil, fmt.Errorf("IsBlocked: issueID must not be empty")
+	}
+	return u.depRepo.IsBlocked(ctx, issueID, DepListOpts{})
+}
+
+func (u *dependencyUseCaseImpl) GetNewlyUnblockedByClose(ctx context.Context, closedIssueID string) ([]*types.Issue, error) {
+	if closedIssueID == "" {
+		return nil, fmt.Errorf("GetNewlyUnblockedByClose: closedIssueID must not be empty")
+	}
+	return u.depRepo.ListNewlyUnblockedByClose(ctx, closedIssueID, DepListOpts{})
 }
 
 func isBlockingDep(t types.DependencyType) bool {

@@ -712,3 +712,37 @@ func (r *issueSQLRepositoryImpl) GetReadyWork(ctx context.Context, filter types.
 func (r *issueSQLRepositoryImpl) GetReadyWorkWithCounts(ctx context.Context, filter types.WorkFilter) (domain.SearchCountsPage, error) {
 	return r.getReadyWorkWithCountsUnion(ctx, filter)
 }
+
+func (r *issueSQLRepositoryImpl) Close(ctx context.Context, id, reason, actor, session string, opts domain.IssueTableOpts) error {
+	_ = ctx
+	_ = id
+	_ = reason
+	_ = actor
+	_ = session
+	_ = opts
+	return errors.New("db: IssueSQLRepository.Close: not implemented")
+}
+
+func (r *issueSQLRepositoryImpl) Delete(ctx context.Context, id string, opts domain.IssueTableOpts) error {
+	_ = ctx
+	_ = id
+	_ = opts
+	return errors.New("db: IssueSQLRepository.Delete: not implemented")
+}
+
+func (r *issueSQLRepositoryImpl) Claim(ctx context.Context, id, actor string, opts domain.IssueTableOpts) error {
+	_ = ctx
+	_ = id
+	_ = actor
+	_ = opts
+	return errors.New("db: IssueSQLRepository.Claim: not implemented")
+}
+
+func (r *issueSQLRepositoryImpl) DeleteBatch(ctx context.Context, ids []string, force, dryRun bool, opts domain.IssueTableOpts) (*types.DeleteIssuesResult, error) {
+	_ = ctx
+	_ = ids
+	_ = force
+	_ = dryRun
+	_ = opts
+	return nil, errors.New("db: IssueSQLRepository.DeleteBatch: not implemented")
+}

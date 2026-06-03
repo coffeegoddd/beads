@@ -53,6 +53,15 @@ func (r *labelSQLRepositoryImpl) Insert(ctx context.Context, issueID, label, act
 	}, domain.RecordEventOpts{UseWispsTable: opts.UseWispsTable})
 }
 
+func (r *labelSQLRepositoryImpl) Remove(ctx context.Context, issueID, label, actor string, opts domain.LabelOpts) error {
+	_ = ctx
+	_ = issueID
+	_ = label
+	_ = actor
+	_ = opts
+	return fmt.Errorf("db: LabelSQLRepository.Remove: not implemented")
+}
+
 func (r *labelSQLRepositoryImpl) List(ctx context.Context, issueID string, opts domain.LabelOpts) ([]string, error) {
 	if issueID == "" {
 		return nil, fmt.Errorf("db: LabelSQLRepository.List: issueID must not be empty")

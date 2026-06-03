@@ -34,6 +34,11 @@ type IssueSQLRepository interface {
 	GetReadyWork(ctx context.Context, filter types.WorkFilter) (SearchPage, error)
 	GetReadyWorkWithCounts(ctx context.Context, filter types.WorkFilter) (SearchCountsPage, error)
 	GetDescendants(ctx context.Context, rootID string, filter types.IssueFilter) ([]*types.Issue, error)
+
+	Close(ctx context.Context, id, reason, actor, session string, opts IssueTableOpts) error
+	Delete(ctx context.Context, id string, opts IssueTableOpts) error
+	Claim(ctx context.Context, id, actor string, opts IssueTableOpts) error
+	DeleteBatch(ctx context.Context, ids []string, force, dryRun bool, opts IssueTableOpts) (*types.DeleteIssuesResult, error)
 }
 
 type SearchPage struct {
@@ -138,6 +143,10 @@ type IssueUseCase interface {
 	CreateIssue(ctx context.Context, params CreateIssueParams, actor string) (CreateIssueResult, error)
 	CreateIssues(ctx context.Context, params []CreateIssueParams, actor string) (CreateIssuesResult, error)
 	UpdateIssue(ctx context.Context, id string, updates map[string]any, actor string) error
+	CloseIssue(ctx context.Context, id, reason, actor, session string) error
+	DeleteIssue(ctx context.Context, id string) error
+	DeleteIssues(ctx context.Context, ids []string, force, dryRun bool) (*types.DeleteIssuesResult, error)
+	ClaimIssue(ctx context.Context, id, actor string) error
 	ApplyIssueGraph(ctx context.Context, plan GraphPlan, actor string) (GraphApplyResult, error)
 
 	GetWisp(ctx context.Context, id string) (*types.Issue, error)
@@ -232,6 +241,34 @@ func (u *issueUseCaseImpl) update(ctx context.Context, id string, updates map[st
 		return nil
 	}
 	return u.issueRepo.Update(ctx, id, updates, actor, IssueTableOpts{UseWispsTable: useWisp})
+}
+
+func (u *issueUseCaseImpl) CloseIssue(ctx context.Context, id, reason, actor, session string) error {
+	if id == "" {
+		return fmt.Errorf("CloseIssue: id must not be empty")
+	}
+	return u.issueRepo.Close(ctx, id, reason, actor, session, IssueTableOpts{})
+}
+
+func (u *issueUseCaseImpl) DeleteIssue(ctx context.Context, id string) error {
+	if id == "" {
+		return fmt.Errorf("DeleteIssue: id must not be empty")
+	}
+	return u.issueRepo.Delete(ctx, id, IssueTableOpts{})
+}
+
+func (u *issueUseCaseImpl) DeleteIssues(ctx context.Context, ids []string, force, dryRun bool) (*types.DeleteIssuesResult, error) {
+	if len(ids) == 0 {
+		return &types.DeleteIssuesResult{}, nil
+	}
+	return u.issueRepo.DeleteBatch(ctx, ids, force, dryRun, IssueTableOpts{})
+}
+
+func (u *issueUseCaseImpl) ClaimIssue(ctx context.Context, id, actor string) error {
+	if id == "" {
+		return fmt.Errorf("ClaimIssue: id must not be empty")
+	}
+	return u.issueRepo.Claim(ctx, id, actor, IssueTableOpts{})
 }
 
 func (u *issueUseCaseImpl) ListIssues(ctx context.Context, filter types.IssueFilter, proj ListProjection) (ListResult, error) {

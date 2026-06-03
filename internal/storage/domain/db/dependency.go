@@ -488,6 +488,57 @@ func buildTypeFilter(depTypes []types.DependencyType) (string, []any) {
 	return " AND type IN (" + strings.Join(ph, ",") + ")", args
 }
 
+func (r *dependencySQLRepositoryImpl) Remove(ctx context.Context, issueID, dependsOnID, actor string, opts domain.DepInsertOpts) error {
+	_ = ctx
+	_ = issueID
+	_ = dependsOnID
+	_ = actor
+	_ = opts
+	return errors.New("db: DependencySQLRepository.Remove: not implemented")
+}
+
+func (r *dependencySQLRepositoryImpl) ListRecordsForIssue(ctx context.Context, issueID string, opts domain.DepListOpts) ([]*types.Dependency, error) {
+	_ = ctx
+	_ = issueID
+	_ = opts
+	return nil, errors.New("db: DependencySQLRepository.ListRecordsForIssue: not implemented")
+}
+
+func (r *dependencySQLRepositoryImpl) ListIssuesDependedOn(ctx context.Context, issueID string, opts domain.DepListOpts) ([]*types.Issue, error) {
+	_ = ctx
+	_ = issueID
+	_ = opts
+	return nil, errors.New("db: DependencySQLRepository.ListIssuesDependedOn: not implemented")
+}
+
+func (r *dependencySQLRepositoryImpl) ListIssueDependents(ctx context.Context, issueID string, opts domain.DepListOpts) ([]*types.Issue, error) {
+	_ = ctx
+	_ = issueID
+	_ = opts
+	return nil, errors.New("db: DependencySQLRepository.ListIssueDependents: not implemented")
+}
+
+func (r *dependencySQLRepositoryImpl) ListDependentsWithMetadata(ctx context.Context, issueID string, opts domain.DepListOpts) ([]*types.IssueWithDependencyMetadata, error) {
+	_ = ctx
+	_ = issueID
+	_ = opts
+	return nil, errors.New("db: DependencySQLRepository.ListDependentsWithMetadata: not implemented")
+}
+
+func (r *dependencySQLRepositoryImpl) IsBlocked(ctx context.Context, issueID string, opts domain.DepListOpts) (bool, []string, error) {
+	_ = ctx
+	_ = issueID
+	_ = opts
+	return false, nil, errors.New("db: DependencySQLRepository.IsBlocked: not implemented")
+}
+
+func (r *dependencySQLRepositoryImpl) ListNewlyUnblockedByClose(ctx context.Context, closedIssueID string, opts domain.DepListOpts) ([]*types.Issue, error) {
+	_ = ctx
+	_ = closedIssueID
+	_ = opts
+	return nil, errors.New("db: DependencySQLRepository.ListNewlyUnblockedByClose: not implemented")
+}
+
 func combineArgs(a, b []any) []any {
 	out := make([]any, 0, len(a)+len(b))
 	out = append(out, a...)
