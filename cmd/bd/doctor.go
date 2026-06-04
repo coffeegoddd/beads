@@ -562,6 +562,9 @@ func runDiagnostics(path string) doctorResult {
 		result.Checks = append(result.Checks, convertDoctorCheck(dc))
 	}
 
+	legacyRemoteCheck := convertWithCategory(doctor.CheckLegacyCLIRemotes(path), doctor.CategoryFederation)
+	result.Checks = append(result.Checks, legacyRemoteCheck)
+
 	// Federation health checks (bd-wkumz.6)
 	// Check 8d: Federation remotesapi port accessibility
 	remotesAPICheck := convertWithCategory(doctor.CheckFederationRemotesAPI(path), doctor.CategoryFederation)

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/spf13/cobra"
 	"github.com/steveyegge/beads/internal/beads"
@@ -11,6 +12,7 @@ import (
 	"github.com/steveyegge/beads/internal/doltserver"
 	"github.com/steveyegge/beads/internal/git"
 	"github.com/steveyegge/beads/internal/storage/dolt"
+	"github.com/steveyegge/beads/internal/storage/doltutil"
 )
 
 // ApplyResult represents the outcome of a single apply action.
@@ -77,18 +79,80 @@ func runApply(dryRun bool) []ApplyResult {
 
 	// Group drift items by check domain to avoid duplicate actions
 	// (e.g., multiple hook items should trigger only one reinstall).
-	hasDrift := map[string]bool{}
-	for _, item := range driftItems {
-		if item.Status == driftStatusDrift {
-			hasDrift[item.Check] = true
-		}
-	}
+	hasDrift := driftDomains(driftItems)
 
 	var results []ApplyResult
 	results = append(results, applyHooks(hasDrift["hooks"], dryRun))
-	results = append(results, applyRemote(hasDrift["remote"], dryRun))
-	results = append(results, applyServer(hasDrift["server"], dryRun))
+	serverResult := applyServer(hasDrift["server"], dryRun)
+	results = append(results, serverResult)
+	results = append(results, remoteApplyResult(driftItems, serverResult, dryRun, checkRemoteDrift))
 	return results
+}
+
+func shouldRecheckRemoteAfterServerStart(remoteSkipped bool, serverResult ApplyResult) bool {
+	return remoteSkipped && serverResult.Check == "server" && serverResult.Status == applyStatusApplied
+}
+
+func remoteApplyResult(driftItems []DriftItem, serverResult ApplyResult, dryRun bool, recheckRemote func() []DriftItem) ApplyResult {
+	remoteItems := driftItems
+	if shouldRecheckRemoteAfterServerStart(skippedDriftDomain(remoteItems, "remote"), serverResult) {
+		remoteItems = recheckRemote()
+	}
+	if skipped := skippedDriftItem(remoteItems, "remote"); skipped != nil {
+		return skippedRemoteApplyResult(*skipped)
+	}
+	return applyRemote(driftDomains(remoteItems)["remote"], dryRun)
+}
+
+func driftDomains(items []DriftItem) map[string]bool {
+	hasDrift := map[string]bool{}
+	for _, item := range items {
+		if item.Status == driftStatusDrift {
+			hasDrift[driftDomain(item.Check)] = true
+		}
+	}
+	return hasDrift
+}
+
+func skippedDriftDomain(items []DriftItem, domain string) bool {
+	return skippedDriftItem(items, domain) != nil
+}
+
+func skippedDriftItem(items []DriftItem, domain string) *DriftItem {
+	for _, item := range items {
+		if item.Status == driftStatusSkipped && driftDomain(item.Check) == domain {
+			skipped := item
+			return &skipped
+		}
+	}
+	return nil
+}
+
+func driftDomain(check string) string {
+	if before, _, ok := strings.Cut(check, "."); ok {
+		return before
+	}
+	return check
+}
+
+func skippedRemoteApplyResult(item DriftItem) ApplyResult {
+	return ApplyResult{
+		Check:   "remote",
+		Action:  "none",
+		Status:  applyStatusSkipped,
+		Message: item.Message,
+	}
+}
+
+func remoteApplyStoreConfig(dryRun bool) *dolt.Config {
+	return &dolt.Config{
+		ReadOnly:         dryRun,
+		DisableAutoStart: true,
+	}
+}
+
+func remoteURLMatchesConfig(currentURL, configuredURL string) bool {
+	return doltutil.RemoteURLsMatch(currentURL, configuredURL)
 }
 
 // applyHooks reinstalls git hooks if drift was detected.
@@ -171,7 +235,7 @@ func applyRemote(drifted bool, dryRun bool) ApplyResult {
 	}
 
 	ctx := context.Background()
-	st, err := dolt.NewFromConfig(ctx, beadsDir)
+	st, err := dolt.NewFromConfigWithOptions(ctx, beadsDir, remoteApplyStoreConfig(dryRun))
 	if err != nil {
 		return ApplyResult{
 			Check:   "remote",
@@ -210,6 +274,14 @@ func applyRemote(drifted bool, dryRun bool) ApplyResult {
 				Message: fmt.Sprintf("Would add Dolt origin remote: %s", federationRemote),
 			}
 		}
+		if remoteURLMatchesConfig(currentURL, federationRemote) {
+			return ApplyResult{
+				Check:   "remote",
+				Action:  "none",
+				Status:  applyStatusOK,
+				Message: "Dolt remote configuration is consistent",
+			}
+		}
 		return ApplyResult{
 			Check:   "remote",
 			Action:  "update_remote",
@@ -233,6 +305,15 @@ func applyRemote(drifted bool, dryRun bool) ApplyResult {
 			Action:  "add_remote",
 			Status:  applyStatusApplied,
 			Message: fmt.Sprintf("Added Dolt origin remote: %s", federationRemote),
+		}
+	}
+
+	if remoteURLMatchesConfig(currentURL, federationRemote) {
+		return ApplyResult{
+			Check:   "remote",
+			Action:  "none",
+			Status:  applyStatusOK,
+			Message: "Dolt remote configuration is consistent",
 		}
 	}
 

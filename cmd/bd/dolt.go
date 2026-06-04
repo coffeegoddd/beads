@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"database/sql"
 	"errors"
@@ -20,6 +21,7 @@ import (
 	"github.com/steveyegge/beads/internal/storage"
 	"github.com/steveyegge/beads/internal/storage/doltutil"
 	"github.com/steveyegge/beads/internal/ui"
+	"golang.org/x/term"
 )
 
 var doltCmd = &cobra.Command{
@@ -868,6 +870,73 @@ Use --dry-run to see what would be dropped without actually dropping.`,
 
 // --- Dolt remote management commands ---
 
+type doltRemoteAddStore interface {
+	ListRemotes(ctx context.Context) ([]storage.RemoteInfo, error)
+	AddRemote(ctx context.Context, name, url string) error
+	RemoveRemote(ctx context.Context, name string) error
+}
+
+type doltRemoteAddResult struct {
+	Canceled bool
+}
+
+type doltRemoteOverwriteConfirmer func(surface, name, existingURL, newURL string) bool
+
+func confirmDoltRemoteOverwrite(surface, name, existingURL, newURL string) bool {
+	if !term.IsTerminal(int(os.Stdin.Fd())) {
+		return true
+	}
+	fmt.Printf("  Remote %q already exists on %s: %s\n", name, surface, existingURL)
+	fmt.Printf("  Overwrite with: %s\n", newURL)
+	fmt.Print("  Overwrite? (y/N): ")
+	reader := bufio.NewReader(os.Stdin)
+	response, err := reader.ReadString('\n')
+	if err != nil {
+		return false
+	}
+	response = strings.TrimSpace(strings.ToLower(response))
+	return response == "y" || response == "yes"
+}
+
+func findDoltRemoteURL(remotes []storage.RemoteInfo, name string) string {
+	for _, remote := range remotes {
+		if remote.Name == name {
+			return remote.URL
+		}
+	}
+	return ""
+}
+
+func ensureDoltRemote(ctx context.Context, st doltRemoteAddStore, name, url string, confirm doltRemoteOverwriteConfirmer) (doltRemoteAddResult, error) {
+	remotes, err := st.ListRemotes(ctx)
+	if err != nil {
+		return doltRemoteAddResult{}, fmt.Errorf("list existing remotes: %w", err)
+	}
+
+	existingURL := findDoltRemoteURL(remotes, name)
+	if existingURL == "" {
+		if err := st.AddRemote(ctx, name, url); err != nil {
+			return doltRemoteAddResult{}, fmt.Errorf("add remote %s: %w", name, err)
+		}
+		return doltRemoteAddResult{}, nil
+	}
+
+	if doltutil.RemoteURLsMatch(existingURL, url) {
+		return doltRemoteAddResult{}, nil
+	}
+
+	if !confirm("SQL server", name, existingURL, url) {
+		return doltRemoteAddResult{Canceled: true}, nil
+	}
+	if err := st.RemoveRemote(ctx, name); err != nil {
+		return doltRemoteAddResult{}, fmt.Errorf("remove existing remote %s: %w", name, err)
+	}
+	if err := st.AddRemote(ctx, name, url); err != nil {
+		return doltRemoteAddResult{}, fmt.Errorf("add remote %s: %w", name, err)
+	}
+	return doltRemoteAddResult{}, nil
+}
+
 var doltRemoteCmd = &cobra.Command{
 	Use:   "remote",
 	Short: "Manage Dolt remotes",
@@ -892,13 +961,18 @@ var doltRemoteAddCmd = &cobra.Command{
 		}
 		name, url := args[0], args[1]
 
-		if err := st.AddRemote(ctx, name, url); err != nil {
+		result, err := ensureDoltRemote(ctx, st, name, url, confirmDoltRemoteOverwrite)
+		if err != nil {
 			if jsonOutput {
 				outputJSONError(err, "remote_add_failed")
 			} else {
 				fmt.Fprintf(os.Stderr, "Error adding remote: %v\n", err)
 			}
 			os.Exit(1)
+		}
+		if result.Canceled {
+			fmt.Println("Canceled.")
+			return
 		}
 
 		if name == "origin" {
@@ -943,7 +1017,7 @@ var doltRemoteListCmd = &cobra.Command{
 		}
 
 		if jsonOutput {
-			outputJSON(remotes)
+			outputJSON(formatDoltRemoteListJSON(remotes))
 			return
 		}
 
@@ -956,6 +1030,27 @@ var doltRemoteListCmd = &cobra.Command{
 			fmt.Printf("%-20s %s\n", r.Name, r.URL)
 		}
 	},
+}
+
+type doltRemoteListJSON struct {
+	Name   string `json:"name"`
+	URL    string `json:"url"`
+	SQLURL string `json:"sql_url,omitempty"`
+	CLIURL string `json:"cli_url,omitempty"`
+	Status string `json:"status"`
+}
+
+func formatDoltRemoteListJSON(remotes []storage.RemoteInfo) []doltRemoteListJSON {
+	out := make([]doltRemoteListJSON, 0, len(remotes))
+	for _, r := range remotes {
+		out = append(out, doltRemoteListJSON{
+			Name:   r.Name,
+			URL:    r.URL,
+			SQLURL: r.URL,
+			Status: "ok",
+		})
+	}
+	return out
 }
 
 var doltRemoteRemoveCmd = &cobra.Command{

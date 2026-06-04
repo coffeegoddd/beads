@@ -11,6 +11,8 @@ import (
 	"testing"
 
 	"github.com/steveyegge/beads/internal/storage"
+	"github.com/steveyegge/beads/internal/storage/doltutil"
+	"github.com/steveyegge/beads/internal/testutil"
 )
 
 func TestEncryptDecryptWithKey(t *testing.T) {
@@ -45,6 +47,37 @@ func TestApplyS3ChecksumEnvToCmd(t *testing.T) {
 	cmd := exec.Command("dolt", "push") // #nosec G204 -- test command is not executed
 	(&remoteCredentials{username: "user", password: "pass"}).applyToCmd(cmd)
 	applyS3ChecksumEnvToCmd(cmd)
+
+	var gotChecksum, gotUser, gotPassword string
+	for _, e := range cmd.Env {
+		switch {
+		case strings.HasPrefix(e, awsResponseChecksumValidationEnv+"="):
+			gotChecksum = strings.TrimPrefix(e, awsResponseChecksumValidationEnv+"=")
+		case strings.HasPrefix(e, "DOLT_REMOTE_USER="):
+			gotUser = strings.TrimPrefix(e, "DOLT_REMOTE_USER=")
+		case strings.HasPrefix(e, "DOLT_REMOTE_PASSWORD="):
+			gotPassword = strings.TrimPrefix(e, "DOLT_REMOTE_PASSWORD=")
+		}
+	}
+
+	if gotChecksum != "when_required" {
+		t.Fatalf("%s = %q, want when_required", awsResponseChecksumValidationEnv, gotChecksum)
+	}
+	if gotUser != "user" || gotPassword != "pass" {
+		t.Fatalf("credential env = user:%q password:%q", gotUser, gotPassword)
+	}
+}
+
+func TestPrepareDoltCLITransferCommandAppliesCredentialsAndS3Env(t *testing.T) {
+	t.Setenv(awsResponseChecksumValidationEnv, "when_supported")
+	creds := &remoteCredentials{username: "user", password: "pass"}
+
+	cmd, cancel := prepareDoltCLITransferCommand(context.Background(), "/tmp/beads-cli", creds, true, "fetch", "peer")
+	defer cancel()
+
+	if cmd.Dir != "/tmp/beads-cli" {
+		t.Fatalf("command dir = %q, want /tmp/beads-cli", cmd.Dir)
+	}
 
 	var gotChecksum, gotUser, gotPassword string
 	for _, e := range cmd.Env {
@@ -620,6 +653,37 @@ func openCloudAuthTestStore(t *testing.T, dbSuffix string) *DoltStore {
 	return store
 }
 
+func ensureCloudAuthCLIDatabase(t *testing.T, store *DoltStore) {
+	t.Helper()
+	testutil.RequireDoltBinary(t)
+
+	cliDir := store.CLIDir()
+	if err := os.MkdirAll(cliDir, 0o755); err != nil {
+		t.Fatalf("create CLI dir: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(cliDir, ".dolt")); os.IsNotExist(err) {
+		c := exec.Command("dolt", "init", "--name", "test", "--email", "test@test.com") // #nosec G204 -- fixed test command
+		c.Dir = cliDir
+		out, err := c.CombinedOutput()
+		if err != nil {
+			t.Fatalf("dolt init failed: %v\n%s", err, out)
+		}
+	}
+}
+
+func addCloudAuthCLIRemote(t *testing.T, store *DoltStore, name, url string) {
+	t.Helper()
+	ensureCloudAuthCLIDatabase(t, store)
+
+	cliDir := store.CLIDir()
+	c := exec.Command("dolt", "remote", "add", name, url) // #nosec G204 -- fixed test command
+	c.Dir = cliDir
+	out, err := c.CombinedOutput()
+	if err != nil {
+		t.Fatalf("dolt remote add %q failed: %v\n%s", name, err, out)
+	}
+}
+
 // clearCloudAuthEnv unsets all process env vars matching the cloud-auth scheme
 // prefixes so shouldUseCLIForCloudAuth tests are deterministic regardless of
 // the runner's ambient AWS_*/AZURE_*/etc. environment. Originals restored on
@@ -684,6 +748,7 @@ func TestCloudAuthCLIRouting(t *testing.T) {
 			if err := store.AddRemote(ctx, "origin", tt.remoteURL); err != nil {
 				t.Fatalf("AddRemote: %v", err)
 			}
+			addCloudAuthCLIRemote(t, store, "origin", tt.remoteURL)
 			if tt.envKey != "" {
 				t.Setenv(tt.envKey, tt.envValue)
 			}
@@ -714,6 +779,25 @@ func TestCloudAuthCLIRoutingStructural(t *testing.T) {
 			t.Error("expected false when remote not configured")
 		}
 	})
+	t.Run("sql remote materializes local CLI remote", func(t *testing.T) {
+		skipIfNoServer(t)
+		store := openCloudAuthTestStore(t, "structural_sql_only")
+		remoteURL := "az://account.blob.core.windows.net/container"
+		if err := store.AddRemote(context.Background(), "origin", remoteURL); err != nil {
+			t.Fatalf("AddRemote: %v", err)
+		}
+		ensureCloudAuthCLIDatabase(t, store)
+		if got := doltutil.FindCLIRemote(store.CLIDir(), "origin"); got != "" {
+			t.Fatalf("precondition: local CLI remote = %q, want absent", got)
+		}
+		t.Setenv("AZURE_STORAGE_ACCOUNT", "myaccount")
+		if !store.shouldUseCLIForCloudAuth(context.Background(), "origin") {
+			t.Error("expected true when SQL remote can be materialized into local CLI directory")
+		}
+		if got := doltutil.FindCLIRemote(store.CLIDir(), "origin"); !doltutil.RemoteURLsMatch(got, remoteURL) {
+			t.Errorf("local CLI remote = %q, want %q", got, remoteURL)
+		}
+	})
 }
 
 // TestPerRemoteCloudAuthHybrid verifies the core use case: a hybrid setup with
@@ -731,6 +815,8 @@ func TestPerRemoteCloudAuthHybrid(t *testing.T) {
 	if err := store.AddRemote(ctx, "backup", "az://account.blob.core.windows.net/dolt/beads"); err != nil {
 		t.Fatalf("AddRemote backup: %v", err)
 	}
+	addCloudAuthCLIRemote(t, store, "primary", "dolthub://org/beads")
+	addCloudAuthCLIRemote(t, store, "backup", "az://account.blob.core.windows.net/dolt/beads")
 
 	t.Setenv("AZURE_STORAGE_ACCOUNT", "myaccount")
 

@@ -155,7 +155,10 @@ func checkRemoteDrift() []DriftItem {
 	}
 
 	ctx := context.Background()
-	st, err := dolt.NewFromConfig(ctx, beadsDir)
+	st, err := dolt.NewFromConfigWithOptions(ctx, beadsDir, &dolt.Config{
+		ReadOnly:         true,
+		DisableAutoStart: true,
+	})
 	if err != nil {
 		return []DriftItem{{
 			Check:   "remote",
@@ -194,7 +197,7 @@ func checkRemoteDrift() []DriftItem {
 	}
 
 	// Case 2: federation.remote set, origin exists but doesn't match
-	if federationRemote != "" && originURL != "" && originURL != federationRemote {
+	if federationRemote != "" && originURL != "" && !remoteURLMatchesConfig(originURL, federationRemote) {
 		return []DriftItem{{
 			Check:    "remote",
 			Status:   driftStatusDrift,
@@ -205,7 +208,7 @@ func checkRemoteDrift() []DriftItem {
 	}
 
 	// Case 3: federation.remote set and matches origin
-	if federationRemote != "" && originURL == federationRemote {
+	if federationRemote != "" && remoteURLMatchesConfig(originURL, federationRemote) {
 		return []DriftItem{{
 			Check:   "remote",
 			Status:  driftStatusOK,
