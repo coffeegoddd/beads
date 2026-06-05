@@ -84,12 +84,13 @@ type DependencyUseCase interface {
 	CountsByWispIDs(ctx context.Context, wispIDs []string) (map[string]*types.DependencyCounts, error)
 }
 
-func NewDependencyUseCase(depRepo DependencySQLRepository) DependencyUseCase {
-	return &dependencyUseCaseImpl{depRepo: depRepo}
+func NewDependencyUseCase(depRepo DependencySQLRepository, blockedRepo BlockedStateSQLRepository) DependencyUseCase {
+	return &dependencyUseCaseImpl{depRepo: depRepo, blockedRepo: blockedRepo}
 }
 
 type dependencyUseCaseImpl struct {
-	depRepo DependencySQLRepository
+	depRepo     DependencySQLRepository
+	blockedRepo BlockedStateSQLRepository
 }
 
 var _ DependencyUseCase = (*dependencyUseCaseImpl)(nil)

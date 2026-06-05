@@ -89,6 +89,7 @@ func (u *baseUOW) IssueUseCase() domain.IssueUseCase {
 			db.NewChildCounterSQLRepository(runner),
 			db.NewCommentSQLRepository(runner),
 			db.NewConfigSQLRepository(runner),
+			db.NewBlockedStateSQLRepository(runner),
 		)
 	}
 	return u.issueUseCase
@@ -96,7 +97,11 @@ func (u *baseUOW) IssueUseCase() domain.IssueUseCase {
 
 func (u *baseUOW) DependencyUseCase() domain.DependencyUseCase {
 	if u.dependencyUseCase == nil {
-		u.dependencyUseCase = domain.NewDependencyUseCase(db.NewDependencySQLRepository(u.tx.Runner()))
+		runner := u.tx.Runner()
+		u.dependencyUseCase = domain.NewDependencyUseCase(
+			db.NewDependencySQLRepository(runner),
+			db.NewBlockedStateSQLRepository(runner),
+		)
 	}
 	return u.dependencyUseCase
 }

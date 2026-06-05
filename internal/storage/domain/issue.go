@@ -3,12 +3,18 @@ package domain
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
 
 	"github.com/steveyegge/beads/internal/idgen"
 	"github.com/steveyegge/beads/internal/types"
+)
+
+var (
+	ErrAlreadyClaimed = errors.New("issue already claimed")
+	ErrNotClaimable   = errors.New("issue not claimable")
 )
 
 type InsertIssueOpts struct {
@@ -175,6 +181,7 @@ func NewIssueUseCase(
 	counterRepo ChildCounterSQLRepository,
 	commentRepo CommentSQLRepository,
 	cfgRepo ConfigSQLRepository,
+	blockedRepo BlockedStateSQLRepository,
 ) IssueUseCase {
 	return &issueUseCaseImpl{
 		issueRepo:   issueRepo,
@@ -183,6 +190,7 @@ func NewIssueUseCase(
 		counterRepo: counterRepo,
 		commentRepo: commentRepo,
 		cfgRepo:     cfgRepo,
+		blockedRepo: blockedRepo,
 	}
 }
 
@@ -193,6 +201,7 @@ type issueUseCaseImpl struct {
 	counterRepo ChildCounterSQLRepository
 	commentRepo CommentSQLRepository
 	cfgRepo     ConfigSQLRepository
+	blockedRepo BlockedStateSQLRepository
 }
 
 var _ IssueUseCase = (*issueUseCaseImpl)(nil)

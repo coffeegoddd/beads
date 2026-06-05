@@ -16,14 +16,16 @@ import (
 
 func NewIssueSQLRepository(runner Runner) domain.IssueSQLRepository {
 	return &issueSQLRepositoryImpl{
-		runner: runner,
-		events: NewEventsSQLRepository(runner),
+		runner:  runner,
+		events:  NewEventsSQLRepository(runner),
+		blocked: NewBlockedStateSQLRepository(runner),
 	}
 }
 
 type issueSQLRepositoryImpl struct {
-	runner Runner
-	events domain.EventsSQLRepository
+	runner  Runner
+	events  domain.EventsSQLRepository
+	blocked domain.BlockedStateSQLRepository
 }
 
 var _ domain.IssueSQLRepository = (*issueSQLRepositoryImpl)(nil)
@@ -714,35 +716,435 @@ func (r *issueSQLRepositoryImpl) GetReadyWorkWithCounts(ctx context.Context, fil
 }
 
 func (r *issueSQLRepositoryImpl) Close(ctx context.Context, id, reason, actor, session string, opts domain.IssueTableOpts) error {
-	_ = ctx
-	_ = id
-	_ = reason
-	_ = actor
-	_ = session
-	_ = opts
-	return errors.New("db: IssueSQLRepository.Close: not implemented")
+	if id == "" {
+		return errors.New("db: Close: id must not be empty")
+	}
+
+	now := time.Now().UTC()
+	table := pickIssueTable(opts.UseWispsTable)
+	//nolint:gosec // G201: table is one of two hardcoded constants
+	q := fmt.Sprintf(`
+		UPDATE %s
+		SET status = ?, closed_at = ?, updated_at = ?, close_reason = ?, closed_by_session = ?
+		WHERE id = ?
+	`, table)
+	res, err := r.runner.ExecContext(ctx, q, string(types.StatusClosed), now, now, reason, session, id)
+	if err != nil {
+		return fmt.Errorf("db: Close %s: %w", id, err)
+	}
+	rows, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("db: Close %s: rows affected: %w", id, err)
+	}
+
+	if rows == 0 {
+		var existingStatus string
+		//nolint:gosec // G201: table is one of two hardcoded constants
+		qerr := r.runner.QueryRowContext(ctx,
+			fmt.Sprintf("SELECT status FROM %s WHERE id = ?", table), id,
+		).Scan(&existingStatus)
+		if errors.Is(qerr, sql.ErrNoRows) {
+			return fmt.Errorf("db: Close %s: %w", id, sql.ErrNoRows)
+		}
+		if qerr != nil {
+			return fmt.Errorf("db: Close %s: check existence: %w", id, qerr)
+		}
+		if types.Status(existingStatus) == types.StatusClosed {
+			return nil
+		}
+		return fmt.Errorf("db: Close %s: no rows updated but status is %q", id, existingStatus)
+	}
+
+	if err := r.events.Record(ctx, domain.Event{
+		IssueID:  id,
+		Type:     types.EventClosed,
+		Actor:    actor,
+		NewValue: reason,
+	}, domain.RecordEventOpts{UseWispsTable: opts.UseWispsTable}); err != nil {
+		return err
+	}
+
+	affected, err := r.blocked.AffectedByStatusChange(ctx, id, opts.UseWispsTable)
+	if err != nil {
+		return fmt.Errorf("db: Close %s: affected by status change: %w", id, err)
+	}
+	if err := r.blocked.Recompute(ctx, affected); err != nil {
+		return fmt.Errorf("db: Close %s: recompute is_blocked: %w", id, err)
+	}
+	return nil
 }
 
 func (r *issueSQLRepositoryImpl) Delete(ctx context.Context, id string, opts domain.IssueTableOpts) error {
-	_ = ctx
-	_ = id
-	_ = opts
-	return errors.New("db: IssueSQLRepository.Delete: not implemented")
+	if id == "" {
+		return errors.New("db: Delete: id must not be empty")
+	}
+
+	var deletedIssues, deletedWisps []string
+	if opts.UseWispsTable {
+		deletedWisps = []string{id}
+	} else {
+		deletedIssues = []string{id}
+	}
+	affected, err := r.blocked.AffectedByDeletion(ctx, deletedIssues, deletedWisps)
+	if err != nil {
+		return fmt.Errorf("db: Delete %s: affected by deletion: %w", id, err)
+	}
+
+	table := pickIssueTable(opts.UseWispsTable)
+	//nolint:gosec // G201: table is one of two hardcoded constants
+	res, err := r.runner.ExecContext(ctx, fmt.Sprintf("DELETE FROM %s WHERE id = ?", table), id)
+	if err != nil {
+		return fmt.Errorf("db: Delete %s: %w", id, err)
+	}
+	rows, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("db: Delete %s: rows affected: %w", id, err)
+	}
+	if rows == 0 {
+		return fmt.Errorf("db: Delete %s: %w", id, sql.ErrNoRows)
+	}
+
+	if opts.UseWispsTable {
+		if _, err := r.runner.ExecContext(ctx,
+			"DELETE FROM dependencies WHERE depends_on_wisp_id = ?", id,
+		); err != nil {
+			return fmt.Errorf("db: Delete %s: scrub orphan wisp dep refs: %w", id, err)
+		}
+	}
+
+	if err := r.blocked.Recompute(ctx, affected); err != nil {
+		return fmt.Errorf("db: Delete %s: recompute is_blocked: %w", id, err)
+	}
+	return nil
 }
 
 func (r *issueSQLRepositoryImpl) Claim(ctx context.Context, id, actor string, opts domain.IssueTableOpts) error {
-	_ = ctx
-	_ = id
-	_ = actor
-	_ = opts
-	return errors.New("db: IssueSQLRepository.Claim: not implemented")
+	if id == "" {
+		return errors.New("db: Claim: id must not be empty")
+	}
+	if actor == "" {
+		return errors.New("db: Claim: actor must not be empty")
+	}
+
+	oldIssue, err := r.Get(ctx, id, opts)
+	if err != nil {
+		return fmt.Errorf("db: Claim %s: read prior state: %w", id, err)
+	}
+
+	now := time.Now().UTC()
+	table := pickIssueTable(opts.UseWispsTable)
+
+	var res sql.Result
+	if oldIssue.StartedAt == nil {
+		//nolint:gosec // G201: table is one of two hardcoded constants
+		res, err = r.runner.ExecContext(ctx, fmt.Sprintf(`
+			UPDATE %s
+			SET assignee = ?, status = 'in_progress', updated_at = ?, started_at = ?
+			WHERE id = ? AND status = 'open' AND (assignee = '' OR assignee IS NULL OR assignee = ?)
+		`, table), actor, now, now, id, actor)
+	} else {
+		//nolint:gosec // G201: table is one of two hardcoded constants
+		res, err = r.runner.ExecContext(ctx, fmt.Sprintf(`
+			UPDATE %s
+			SET assignee = ?, status = 'in_progress', updated_at = ?
+			WHERE id = ? AND status = 'open' AND (assignee = '' OR assignee IS NULL OR assignee = ?)
+		`, table), actor, now, id, actor)
+	}
+	if err != nil {
+		return fmt.Errorf("db: Claim %s: %w", id, err)
+	}
+	rows, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("db: Claim %s: rows affected: %w", id, err)
+	}
+
+	if rows == 0 {
+		var currentAssignee sql.NullString
+		var currentStatus string
+		//nolint:gosec // G201: table is one of two hardcoded constants
+		if err := r.runner.QueryRowContext(ctx, fmt.Sprintf(
+			"SELECT assignee, status FROM %s WHERE id = ?", table), id,
+		).Scan(&currentAssignee, &currentStatus); err != nil {
+			return fmt.Errorf("db: Claim %s: read current state: %w", id, err)
+		}
+		assignee := ""
+		if currentAssignee.Valid {
+			assignee = currentAssignee.String
+		}
+		if assignee == actor && types.Status(currentStatus) == types.StatusInProgress {
+			return nil
+		}
+		if assignee != "" && assignee != actor {
+			return fmt.Errorf("%w by %s", domain.ErrAlreadyClaimed, assignee)
+		}
+		return fmt.Errorf("%w: status %s", domain.ErrNotClaimable, currentStatus)
+	}
+
+	oldData, err := json.Marshal(oldIssue)
+	if err != nil {
+		return fmt.Errorf("db: Claim %s: marshal old: %w", id, err)
+	}
+	newData, err := json.Marshal(map[string]any{"assignee": actor, "status": "in_progress"})
+	if err != nil {
+		return fmt.Errorf("db: Claim %s: marshal new: %w", id, err)
+	}
+
+	return r.events.Record(ctx, domain.Event{
+		IssueID:  id,
+		Type:     types.EventType("claimed"),
+		Actor:    actor,
+		OldValue: string(oldData),
+		NewValue: string(newData),
+	}, domain.RecordEventOpts{UseWispsTable: opts.UseWispsTable})
 }
 
+const deleteBatchSize = 50
+
+const maxCascadeResults = 10000
+
 func (r *issueSQLRepositoryImpl) DeleteBatch(ctx context.Context, ids []string, force, dryRun bool, opts domain.IssueTableOpts) (*types.DeleteIssuesResult, error) {
-	_ = ctx
-	_ = ids
 	_ = force
-	_ = dryRun
 	_ = opts
-	return nil, errors.New("db: IssueSQLRepository.DeleteBatch: not implemented")
+	if len(ids) == 0 {
+		return &types.DeleteIssuesResult{}, nil
+	}
+
+	initialWisps, initialIssues, err := r.partitionByTable(ctx, ids)
+	if err != nil {
+		return nil, fmt.Errorf("db: DeleteBatch: partition: %w", err)
+	}
+
+	expanded, err := r.expandDependentsRecursive(ctx, initialIssues, initialWisps)
+	if err != nil {
+		return nil, fmt.Errorf("db: DeleteBatch: cascade: %w", err)
+	}
+
+	finalWisps, finalIssues, err := r.partitionByTable(ctx, expanded)
+	if err != nil {
+		return nil, fmt.Errorf("db: DeleteBatch: re-partition: %w", err)
+	}
+
+	depsCount, err := countRowsForIDs(ctx, r.runner, "dependencies", "issue_id", finalIssues)
+	if err != nil {
+		return nil, fmt.Errorf("db: DeleteBatch: count dependencies: %w", err)
+	}
+	wispDepsCount, err := countRowsForIDs(ctx, r.runner, "wisp_dependencies", "issue_id", finalWisps)
+	if err != nil {
+		return nil, fmt.Errorf("db: DeleteBatch: count wisp dependencies: %w", err)
+	}
+	depsCount += wispDepsCount
+
+	labelsCount, err := countRowsForIDs(ctx, r.runner, "labels", "issue_id", finalIssues)
+	if err != nil {
+		return nil, fmt.Errorf("db: DeleteBatch: count labels: %w", err)
+	}
+	wispLabelsCount, err := countRowsForIDs(ctx, r.runner, "wisp_labels", "issue_id", finalWisps)
+	if err != nil {
+		return nil, fmt.Errorf("db: DeleteBatch: count wisp labels: %w", err)
+	}
+	labelsCount += wispLabelsCount
+
+	eventsCount, err := countRowsForIDs(ctx, r.runner, "events", "issue_id", finalIssues)
+	if err != nil {
+		return nil, fmt.Errorf("db: DeleteBatch: count events: %w", err)
+	}
+	wispEventsCount, err := countRowsForIDs(ctx, r.runner, "wisp_events", "issue_id", finalWisps)
+	if err != nil {
+		return nil, fmt.Errorf("db: DeleteBatch: count wisp events: %w", err)
+	}
+	eventsCount += wispEventsCount
+
+	result := &types.DeleteIssuesResult{
+		DeletedCount:      len(finalIssues) + len(finalWisps),
+		DependenciesCount: depsCount,
+		LabelsCount:       labelsCount,
+		EventsCount:       eventsCount,
+	}
+
+	if dryRun {
+		return result, nil
+	}
+
+	affected, err := r.blocked.AffectedByDeletion(ctx, finalIssues, finalWisps)
+	if err != nil {
+		return nil, fmt.Errorf("db: DeleteBatch: affected by deletion: %w", err)
+	}
+
+	if err := deleteRowsBatched(ctx, r.runner, "wisps", finalWisps); err != nil {
+		return nil, fmt.Errorf("db: DeleteBatch: %w", err)
+	}
+	if len(finalWisps) > 0 {
+		if err := scrubOrphanWispDepRefs(ctx, r.runner, finalWisps); err != nil {
+			return nil, fmt.Errorf("db: DeleteBatch: %w", err)
+		}
+	}
+	if err := deleteRowsBatched(ctx, r.runner, "issues", finalIssues); err != nil {
+		return nil, fmt.Errorf("db: DeleteBatch: %w", err)
+	}
+
+	if err := r.blocked.Recompute(ctx, affected); err != nil {
+		return nil, fmt.Errorf("db: DeleteBatch: recompute is_blocked: %w", err)
+	}
+	return result, nil
+}
+
+func (r *issueSQLRepositoryImpl) partitionByTable(ctx context.Context, ids []string) (wispIDs, issueIDs []string, err error) {
+	if len(ids) == 0 {
+		return nil, nil, nil
+	}
+	wispSet := make(map[string]bool, len(ids))
+	for start := 0; start < len(ids); start += deleteBatchSize {
+		end := start + deleteBatchSize
+		if end > len(ids) {
+			end = len(ids)
+		}
+		batch := ids[start:end]
+		placeholders, args := buildInPlaceholders(batch)
+		//nolint:gosec // G201: placeholders contain only ? markers
+		rows, qerr := r.runner.QueryContext(ctx,
+			fmt.Sprintf("SELECT id FROM wisps WHERE id IN (%s)", placeholders), args...)
+		if qerr != nil {
+			return nil, nil, fmt.Errorf("probe wisps: %w", qerr)
+		}
+		for rows.Next() {
+			var id string
+			if serr := rows.Scan(&id); serr != nil {
+				_ = rows.Close()
+				return nil, nil, fmt.Errorf("scan wisp id: %w", serr)
+			}
+			wispSet[id] = true
+		}
+		_ = rows.Close()
+		if rerr := rows.Err(); rerr != nil {
+			return nil, nil, fmt.Errorf("iterate wisp probe: %w", rerr)
+		}
+	}
+	for _, id := range ids {
+		if wispSet[id] {
+			wispIDs = append(wispIDs, id)
+		} else {
+			issueIDs = append(issueIDs, id)
+		}
+	}
+	return wispIDs, issueIDs, nil
+}
+
+func (r *issueSQLRepositoryImpl) expandDependentsRecursive(ctx context.Context, seedIssues, seedWisps []string) ([]string, error) {
+	seen := make(map[string]bool, len(seedIssues)+len(seedWisps))
+	queue := make([]string, 0, len(seedIssues)+len(seedWisps))
+	for _, id := range seedIssues {
+		if !seen[id] {
+			seen[id] = true
+			queue = append(queue, id)
+		}
+	}
+	for _, id := range seedWisps {
+		if !seen[id] {
+			seen[id] = true
+			queue = append(queue, id)
+		}
+	}
+
+	head := 0
+	for head < len(queue) {
+		if len(seen) > maxCascadeResults {
+			return nil, fmt.Errorf("cascade traversal discovered over %d issues; aborting to prevent runaway deletion", maxCascadeResults)
+		}
+		end := head + deleteBatchSize
+		if end > len(queue) {
+			end = len(queue)
+		}
+		batch := queue[head:end]
+		head = end
+
+		placeholders, args := buildInPlaceholders(batch)
+		for _, depTable := range []string{"dependencies", "wisp_dependencies"} {
+			//nolint:gosec // G201: depTable is a hardcoded constant; placeholders contain only ? markers
+			q := fmt.Sprintf(`
+				SELECT issue_id FROM %s
+				WHERE depends_on_issue_id IN (%s)
+				   OR depends_on_wisp_id IN (%s)
+			`, depTable, placeholders, placeholders)
+			doubled := make([]any, 0, len(args)*2)
+			doubled = append(doubled, args...)
+			doubled = append(doubled, args...)
+			rows, qerr := r.runner.QueryContext(ctx, q, doubled...)
+			if qerr != nil {
+				return nil, fmt.Errorf("query dependents from %s: %w", depTable, qerr)
+			}
+			for rows.Next() {
+				var id string
+				if serr := rows.Scan(&id); serr != nil {
+					_ = rows.Close()
+					return nil, fmt.Errorf("scan dependent: %w", serr)
+				}
+				if !seen[id] {
+					seen[id] = true
+					queue = append(queue, id)
+				}
+			}
+			_ = rows.Close()
+			if rerr := rows.Err(); rerr != nil {
+				return nil, fmt.Errorf("iterate dependents from %s: %w", depTable, rerr)
+			}
+		}
+	}
+	return queue, nil
+}
+
+//nolint:gosec // G201: table and column come from constant call sites; placeholders contain only ? markers
+func countRowsForIDs(ctx context.Context, runner Runner, table, idColumn string, ids []string) (int, error) {
+	total := 0
+	for start := 0; start < len(ids); start += deleteBatchSize {
+		end := start + deleteBatchSize
+		if end > len(ids) {
+			end = len(ids)
+		}
+		placeholders, args := buildInPlaceholders(ids[start:end])
+		var n int
+		if err := runner.QueryRowContext(ctx,
+			fmt.Sprintf("SELECT COUNT(*) FROM %s WHERE %s IN (%s)", table, idColumn, placeholders),
+			args...,
+		).Scan(&n); err != nil {
+			return 0, fmt.Errorf("count %s: %w", table, err)
+		}
+		total += n
+	}
+	return total, nil
+}
+
+//nolint:gosec // G201: table is a hardcoded constant; placeholders contain only ? markers
+func deleteRowsBatched(ctx context.Context, runner Runner, table string, ids []string) error {
+	for start := 0; start < len(ids); start += deleteBatchSize {
+		end := start + deleteBatchSize
+		if end > len(ids) {
+			end = len(ids)
+		}
+		placeholders, args := buildInPlaceholders(ids[start:end])
+		if _, err := runner.ExecContext(ctx,
+			fmt.Sprintf("DELETE FROM %s WHERE id IN (%s)", table, placeholders),
+			args...,
+		); err != nil {
+			return fmt.Errorf("delete from %s: %w", table, err)
+		}
+	}
+	return nil
+}
+
+//nolint:gosec // G201: placeholders contain only ? markers
+func scrubOrphanWispDepRefs(ctx context.Context, runner Runner, wispIDs []string) error {
+	for start := 0; start < len(wispIDs); start += deleteBatchSize {
+		end := start + deleteBatchSize
+		if end > len(wispIDs) {
+			end = len(wispIDs)
+		}
+		placeholders, args := buildInPlaceholders(wispIDs[start:end])
+		if _, err := runner.ExecContext(ctx,
+			fmt.Sprintf("DELETE FROM dependencies WHERE depends_on_wisp_id IN (%s)", placeholders),
+			args...,
+		); err != nil {
+			return fmt.Errorf("scrub orphan wisp dep refs: %w", err)
+		}
+	}
+	return nil
 }

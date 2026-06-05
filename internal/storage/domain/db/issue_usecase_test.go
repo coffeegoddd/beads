@@ -27,6 +27,7 @@ func (s *testSuite) issueUseCase() domain.IssueUseCase {
 		NewChildCounterSQLRepository(runner),
 		NewCommentSQLRepository(runner),
 		NewConfigSQLRepository(runner),
+		NewBlockedStateSQLRepository(runner),
 	)
 }
 

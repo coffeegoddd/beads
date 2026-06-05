@@ -184,4 +184,3 @@ func applyLabelUpdatesUOW(ctx context.Context, uw uow.UnitOfWork, issueID, actor
 	}
 	return nil
 }
-

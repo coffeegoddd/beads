@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -14,11 +15,15 @@ import (
 )
 
 func NewDependencySQLRepository(runner Runner) domain.DependencySQLRepository {
-	return &dependencySQLRepositoryImpl{runner: runner}
+	return &dependencySQLRepositoryImpl{
+		runner:  runner,
+		blocked: NewBlockedStateSQLRepository(runner),
+	}
 }
 
 type dependencySQLRepositoryImpl struct {
-	runner Runner
+	runner  Runner
+	blocked domain.BlockedStateSQLRepository
 }
 
 var _ domain.DependencySQLRepository = (*dependencySQLRepositoryImpl)(nil)
@@ -489,54 +494,575 @@ func buildTypeFilter(depTypes []types.DependencyType) (string, []any) {
 }
 
 func (r *dependencySQLRepositoryImpl) Remove(ctx context.Context, issueID, dependsOnID, actor string, opts domain.DepInsertOpts) error {
-	_ = ctx
-	_ = issueID
-	_ = dependsOnID
 	_ = actor
-	_ = opts
-	return errors.New("db: DependencySQLRepository.Remove: not implemented")
+	if issueID == "" || dependsOnID == "" {
+		return errors.New("db: Remove: issueID and dependsOnID must not be empty")
+	}
+
+	table := pickDepTable(opts.UseWispsTable)
+
+	var depType string
+	//nolint:gosec // G201: table and depTargetExpr are hardcoded constants
+	row := r.runner.QueryRowContext(ctx,
+		fmt.Sprintf("SELECT type FROM %s WHERE issue_id = ? AND %s = ?", table, depTargetExpr),
+		issueID, dependsOnID,
+	)
+	if err := row.Scan(&depType); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil
+		}
+		return fmt.Errorf("db: Remove %s -> %s: lookup type: %w", issueID, dependsOnID, err)
+	}
+
+	//nolint:gosec // G201: table and depTargetExpr are hardcoded constants
+	if _, err := r.runner.ExecContext(ctx,
+		fmt.Sprintf("DELETE FROM %s WHERE issue_id = ? AND %s = ?", table, depTargetExpr),
+		issueID, dependsOnID,
+	); err != nil {
+		return fmt.Errorf("db: Remove %s -> %s: %w", issueID, dependsOnID, err)
+	}
+
+	affected, err := r.blocked.AffectedByDepChange(ctx, issueID, dependsOnID, types.DependencyType(depType), opts.UseWispsTable)
+	if err != nil {
+		return fmt.Errorf("db: Remove %s -> %s: affected by dep change: %w", issueID, dependsOnID, err)
+	}
+	if err := r.blocked.Recompute(ctx, affected); err != nil {
+		return fmt.Errorf("db: Remove %s -> %s: recompute is_blocked: %w", issueID, dependsOnID, err)
+	}
+	return nil
 }
 
 func (r *dependencySQLRepositoryImpl) ListRecordsForIssue(ctx context.Context, issueID string, opts domain.DepListOpts) ([]*types.Dependency, error) {
-	_ = ctx
-	_ = issueID
-	_ = opts
-	return nil, errors.New("db: DependencySQLRepository.ListRecordsForIssue: not implemented")
+	if issueID == "" {
+		return nil, errors.New("db: ListRecordsForIssue: issueID must not be empty")
+	}
+	bulk, err := r.ListByIssueIDs(ctx, []string{issueID}, domain.DepListOpts{
+		Types:         opts.Types,
+		Direction:     domain.DepDirectionOut,
+		UseWispsTable: opts.UseWispsTable,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("db: ListRecordsForIssue %s: %w", issueID, err)
+	}
+	return bulk.Outgoing[issueID], nil
 }
 
 func (r *dependencySQLRepositoryImpl) ListIssuesDependedOn(ctx context.Context, issueID string, opts domain.DepListOpts) ([]*types.Issue, error) {
-	_ = ctx
-	_ = issueID
 	_ = opts
-	return nil, errors.New("db: DependencySQLRepository.ListIssuesDependedOn: not implemented")
+	if issueID == "" {
+		return nil, errors.New("db: ListIssuesDependedOn: issueID must not be empty")
+	}
+	return r.fetchRelatedIssues(ctx, issueID, depRelationOutgoing)
 }
 
 func (r *dependencySQLRepositoryImpl) ListIssueDependents(ctx context.Context, issueID string, opts domain.DepListOpts) ([]*types.Issue, error) {
-	_ = ctx
-	_ = issueID
 	_ = opts
-	return nil, errors.New("db: DependencySQLRepository.ListIssueDependents: not implemented")
+	if issueID == "" {
+		return nil, errors.New("db: ListIssueDependents: issueID must not be empty")
+	}
+	return r.fetchRelatedIssues(ctx, issueID, depRelationIncoming)
 }
 
 func (r *dependencySQLRepositoryImpl) ListDependentsWithMetadata(ctx context.Context, issueID string, opts domain.DepListOpts) ([]*types.IssueWithDependencyMetadata, error) {
-	_ = ctx
-	_ = issueID
 	_ = opts
-	return nil, errors.New("db: DependencySQLRepository.ListDependentsWithMetadata: not implemented")
+	if issueID == "" {
+		return nil, errors.New("db: ListDependentsWithMetadata: issueID must not be empty")
+	}
+
+	var fromIssues, fromWisps []dependentMeta
+
+	collect := func(depTable string, sink *[]dependentMeta) error {
+		//nolint:gosec // G201: depTable is a hardcoded constant
+		q := fmt.Sprintf(
+			"SELECT issue_id, type FROM %s WHERE depends_on_issue_id = ? OR depends_on_wisp_id = ?",
+			depTable,
+		)
+		rows, err := r.runner.QueryContext(ctx, q, issueID, issueID)
+		if err != nil {
+			return fmt.Errorf("query %s: %w", depTable, err)
+		}
+		for rows.Next() {
+			var id, depType string
+			if err := rows.Scan(&id, &depType); err != nil {
+				_ = rows.Close()
+				return fmt.Errorf("scan %s: %w", depTable, err)
+			}
+			*sink = append(*sink, dependentMeta{depID: id, depType: types.DependencyType(depType)})
+		}
+		_ = rows.Close()
+		if err := rows.Err(); err != nil {
+			return fmt.Errorf("iterate %s: %w", depTable, err)
+		}
+		return nil
+	}
+
+	if err := collect("dependencies", &fromIssues); err != nil {
+		return nil, fmt.Errorf("db: ListDependentsWithMetadata: %w", err)
+	}
+	if err := collect("wisp_dependencies", &fromWisps); err != nil {
+		return nil, fmt.Errorf("db: ListDependentsWithMetadata: %w", err)
+	}
+
+	if len(fromIssues) == 0 && len(fromWisps) == 0 {
+		return nil, nil
+	}
+
+	issueByID, err := r.fetchIssuesByIDs(ctx, "issues", depIDs(fromIssues))
+	if err != nil {
+		return nil, fmt.Errorf("db: ListDependentsWithMetadata: %w", err)
+	}
+	wispByID, err := r.fetchIssuesByIDs(ctx, "wisps", depIDs(fromWisps))
+	if err != nil {
+		return nil, fmt.Errorf("db: ListDependentsWithMetadata: %w", err)
+	}
+
+	var out []*types.IssueWithDependencyMetadata
+	for _, m := range fromIssues {
+		iss, ok := issueByID[m.depID]
+		if !ok {
+			continue
+		}
+		out = append(out, &types.IssueWithDependencyMetadata{
+			Issue:          *iss,
+			DependencyType: m.depType,
+		})
+	}
+	for _, m := range fromWisps {
+		iss, ok := wispByID[m.depID]
+		if !ok {
+			continue
+		}
+		out = append(out, &types.IssueWithDependencyMetadata{
+			Issue:          *iss,
+			DependencyType: m.depType,
+		})
+	}
+	return out, nil
+}
+
+//nolint:gosec // G201: table is a hardcoded constant; placeholders contain only ? markers
+func (r *dependencySQLRepositoryImpl) fetchIssuesByIDs(ctx context.Context, table string, ids []string) (map[string]*types.Issue, error) {
+	out := make(map[string]*types.Issue, len(ids))
+	if len(ids) == 0 {
+		return out, nil
+	}
+	placeholders, args := buildInPlaceholders(ids)
+	q := fmt.Sprintf("SELECT %s FROM %s WHERE id IN (%s)", issueSelectColumns, table, placeholders)
+	rows, err := r.runner.QueryContext(ctx, q, args...)
+	if err != nil {
+		return nil, fmt.Errorf("fetch from %s: %w", table, err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		iss, err := scanIssue(rows)
+		if err != nil {
+			return nil, fmt.Errorf("scan %s: %w", table, err)
+		}
+		out[iss.ID] = iss
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate %s: %w", table, err)
+	}
+	return out, nil
+}
+
+type dependentMeta struct {
+	depID   string
+	depType types.DependencyType
+}
+
+func depIDs(meta []dependentMeta) []string {
+	out := make([]string, 0, len(meta))
+	seen := make(map[string]bool, len(meta))
+	for _, m := range meta {
+		if !seen[m.depID] {
+			seen[m.depID] = true
+			out = append(out, m.depID)
+		}
+	}
+	return out
 }
 
 func (r *dependencySQLRepositoryImpl) IsBlocked(ctx context.Context, issueID string, opts domain.DepListOpts) (bool, []string, error) {
-	_ = ctx
-	_ = issueID
 	_ = opts
-	return false, nil, errors.New("db: DependencySQLRepository.IsBlocked: not implemented")
+	if issueID == "" {
+		return false, nil, errors.New("db: IsBlocked: issueID must not be empty")
+	}
+
+	var (
+		blocked bool
+		found   bool
+	)
+	for _, table := range []string{"issues", "wisps"} {
+		var b int
+		//nolint:gosec // G201: table is a hardcoded constant
+		err := r.runner.QueryRowContext(ctx, "SELECT is_blocked FROM "+table+" WHERE id = ?", issueID).Scan(&b)
+		switch {
+		case err == nil:
+			blocked = b != 0
+			found = true
+		case errors.Is(err, sql.ErrNoRows):
+			continue
+		default:
+			return false, nil, fmt.Errorf("db: IsBlocked: read is_blocked from %s: %w", table, err)
+		}
+		if found {
+			break
+		}
+	}
+	if !found || !blocked {
+		return false, nil, nil
+	}
+
+	type depEdge struct {
+		dependsOnID string
+		depType     string
+	}
+	var edges []depEdge
+	for _, depTable := range []string{"dependencies", "wisp_dependencies"} {
+		//nolint:gosec // G201: depTable is a hardcoded constant
+		q := fmt.Sprintf(
+			"SELECT %s AS depends_on_id, type FROM %s WHERE issue_id = ? AND type IN ('blocks', 'waits-for', 'conditional-blocks')",
+			depTargetExpr, depTable,
+		)
+		rows, err := r.runner.QueryContext(ctx, q, issueID)
+		if err != nil {
+			return false, nil, fmt.Errorf("db: IsBlocked: query %s: %w", depTable, err)
+		}
+		for rows.Next() {
+			var e depEdge
+			if err := rows.Scan(&e.dependsOnID, &e.depType); err != nil {
+				_ = rows.Close()
+				return false, nil, fmt.Errorf("db: IsBlocked: scan %s: %w", depTable, err)
+			}
+			edges = append(edges, e)
+		}
+		_ = rows.Close()
+		if err := rows.Err(); err != nil {
+			return false, nil, fmt.Errorf("db: IsBlocked: iterate %s: %w", depTable, err)
+		}
+	}
+
+	if len(edges) == 0 {
+		return true, nil, nil
+	}
+
+	blockerIDSet := make(map[string]struct{}, len(edges))
+	for _, e := range edges {
+		blockerIDSet[e.dependsOnID] = struct{}{}
+	}
+	statusByID, err := r.loadStatusByID(ctx, blockerIDSet)
+	if err != nil {
+		return false, nil, fmt.Errorf("db: IsBlocked: status lookup: %w", err)
+	}
+
+	var blockers []string
+	for _, e := range edges {
+		status, ok := statusByID[e.dependsOnID]
+		if !ok {
+			continue
+		}
+		if status == types.StatusClosed || status == types.StatusPinned {
+			continue
+		}
+		if e.depType != "blocks" {
+			blockers = append(blockers, e.dependsOnID+" ("+e.depType+")")
+		} else {
+			blockers = append(blockers, e.dependsOnID)
+		}
+	}
+	return true, blockers, nil
 }
 
 func (r *dependencySQLRepositoryImpl) ListNewlyUnblockedByClose(ctx context.Context, closedIssueID string, opts domain.DepListOpts) ([]*types.Issue, error) {
-	_ = ctx
-	_ = closedIssueID
 	_ = opts
-	return nil, errors.New("db: DependencySQLRepository.ListNewlyUnblockedByClose: not implemented")
+	if closedIssueID == "" {
+		return nil, errors.New("db: ListNewlyUnblockedByClose: closedIssueID must not be empty")
+	}
+
+	candidatesFromIssues := make(map[string]bool)
+	candidatesFromWisps := make(map[string]bool)
+	collect := func(depTable string, sink map[string]bool) error {
+		//nolint:gosec // G201: depTable is a hardcoded constant
+		q := fmt.Sprintf(
+			"SELECT issue_id FROM %s WHERE (depends_on_issue_id = ? OR depends_on_wisp_id = ?) AND type = 'blocks'",
+			depTable,
+		)
+		rows, err := r.runner.QueryContext(ctx, q, closedIssueID, closedIssueID)
+		if err != nil {
+			return fmt.Errorf("query %s: %w", depTable, err)
+		}
+		for rows.Next() {
+			var id string
+			if err := rows.Scan(&id); err != nil {
+				_ = rows.Close()
+				return fmt.Errorf("scan %s: %w", depTable, err)
+			}
+			sink[id] = true
+		}
+		_ = rows.Close()
+		if err := rows.Err(); err != nil {
+			return fmt.Errorf("iterate %s: %w", depTable, err)
+		}
+		return nil
+	}
+
+	if err := collect("dependencies", candidatesFromIssues); err != nil {
+		return nil, fmt.Errorf("db: ListNewlyUnblockedByClose: %w", err)
+	}
+	if err := collect("wisp_dependencies", candidatesFromWisps); err != nil {
+		return nil, fmt.Errorf("db: ListNewlyUnblockedByClose: %w", err)
+	}
+	if len(candidatesFromIssues) == 0 && len(candidatesFromWisps) == 0 {
+		return nil, nil
+	}
+
+	statusIDSet := make(map[string]struct{}, len(candidatesFromIssues)+len(candidatesFromWisps))
+	for id := range candidatesFromIssues {
+		statusIDSet[id] = struct{}{}
+	}
+	for id := range candidatesFromWisps {
+		statusIDSet[id] = struct{}{}
+	}
+	statusByID, err := r.loadStatusByID(ctx, statusIDSet)
+	if err != nil {
+		return nil, fmt.Errorf("db: ListNewlyUnblockedByClose: candidate status: %w", err)
+	}
+
+	activeIssueCandidates := make([]string, 0, len(candidatesFromIssues))
+	for id := range candidatesFromIssues {
+		st, ok := statusByID[id]
+		if !ok || st == types.StatusClosed || st == types.StatusPinned {
+			continue
+		}
+		activeIssueCandidates = append(activeIssueCandidates, id)
+	}
+	activeWispCandidates := make([]string, 0, len(candidatesFromWisps))
+	for id := range candidatesFromWisps {
+		st, ok := statusByID[id]
+		if !ok || st == types.StatusClosed || st == types.StatusPinned {
+			continue
+		}
+		activeWispCandidates = append(activeWispCandidates, id)
+	}
+	sort.Strings(activeIssueCandidates)
+	sort.Strings(activeWispCandidates)
+
+	if len(activeIssueCandidates) == 0 && len(activeWispCandidates) == 0 {
+		return nil, nil
+	}
+
+	stillBlocked, err := r.candidatesStillBlocked(ctx, "dependencies", activeIssueCandidates, closedIssueID)
+	if err != nil {
+		return nil, fmt.Errorf("db: ListNewlyUnblockedByClose: %w", err)
+	}
+	wispStillBlocked, err := r.candidatesStillBlocked(ctx, "wisp_dependencies", activeWispCandidates, closedIssueID)
+	if err != nil {
+		return nil, fmt.Errorf("db: ListNewlyUnblockedByClose: %w", err)
+	}
+
+	keepIssues := make([]string, 0, len(activeIssueCandidates))
+	for _, id := range activeIssueCandidates {
+		if !stillBlocked[id] {
+			keepIssues = append(keepIssues, id)
+		}
+	}
+	keepWisps := make([]string, 0, len(activeWispCandidates))
+	for _, id := range activeWispCandidates {
+		if !wispStillBlocked[id] {
+			keepWisps = append(keepWisps, id)
+		}
+	}
+
+	issueByID, err := r.fetchIssuesByIDs(ctx, "issues", keepIssues)
+	if err != nil {
+		return nil, fmt.Errorf("db: ListNewlyUnblockedByClose: hydrate issues: %w", err)
+	}
+	wispByID, err := r.fetchIssuesByIDs(ctx, "wisps", keepWisps)
+	if err != nil {
+		return nil, fmt.Errorf("db: ListNewlyUnblockedByClose: hydrate wisps: %w", err)
+	}
+
+	out := make([]*types.Issue, 0, len(keepIssues)+len(keepWisps))
+	for _, id := range keepIssues {
+		if iss, ok := issueByID[id]; ok {
+			out = append(out, iss)
+		}
+	}
+	for _, id := range keepWisps {
+		if iss, ok := wispByID[id]; ok {
+			out = append(out, iss)
+		}
+	}
+	return out, nil
+}
+
+//nolint:gosec // G201: depTable is a hardcoded constant
+func (r *dependencySQLRepositoryImpl) candidatesStillBlocked(ctx context.Context, depTable string, candidateIDs []string, closedIssueID string) (map[string]bool, error) {
+	stillBlocked := make(map[string]bool)
+	if len(candidateIDs) == 0 {
+		return stillBlocked, nil
+	}
+	const batch = 200
+	for start := 0; start < len(candidateIDs); start += batch {
+		end := start + batch
+		if end > len(candidateIDs) {
+			end = len(candidateIDs)
+		}
+		placeholders, args := buildInPlaceholders(candidateIDs[start:end])
+		q := fmt.Sprintf(
+			"SELECT issue_id, %s AS blocker_id FROM %s WHERE issue_id IN (%s) AND type = 'blocks' AND %s != ?",
+			depTargetExpr, depTable, placeholders, depTargetExpr,
+		)
+		queryArgs := append([]any{}, args...)
+		queryArgs = append(queryArgs, closedIssueID)
+
+		type pair struct {
+			candidate, blocker string
+		}
+		var pairs []pair
+		blockerSet := make(map[string]struct{})
+		rows, err := r.runner.QueryContext(ctx, q, queryArgs...)
+		if err != nil {
+			return nil, fmt.Errorf("query %s remaining blockers: %w", depTable, err)
+		}
+		for rows.Next() {
+			var p pair
+			if err := rows.Scan(&p.candidate, &p.blocker); err != nil {
+				_ = rows.Close()
+				return nil, fmt.Errorf("scan %s remaining blocker: %w", depTable, err)
+			}
+			pairs = append(pairs, p)
+			blockerSet[p.blocker] = struct{}{}
+		}
+		_ = rows.Close()
+		if err := rows.Err(); err != nil {
+			return nil, fmt.Errorf("iterate %s remaining blockers: %w", depTable, err)
+		}
+
+		statusByID, err := r.loadStatusByID(ctx, blockerSet)
+		if err != nil {
+			return nil, fmt.Errorf("status of remaining %s blockers: %w", depTable, err)
+		}
+		for _, p := range pairs {
+			if stillBlocked[p.candidate] {
+				continue
+			}
+			st, ok := statusByID[p.blocker]
+			if ok && st != types.StatusClosed && st != types.StatusPinned {
+				stillBlocked[p.candidate] = true
+			}
+		}
+	}
+	return stillBlocked, nil
+}
+
+type depRelationDirection int
+
+const (
+	depRelationOutgoing depRelationDirection = iota
+	depRelationIncoming
+)
+
+//nolint:gosec // G201: all SQL fragments come from package constants
+func (r *dependencySQLRepositoryImpl) fetchRelatedIssues(ctx context.Context, issueID string, dir depRelationDirection) ([]*types.Issue, error) {
+	var (
+		issueTargetClause string
+		wispTargetClause  string
+		filterCol         string
+	)
+	switch dir {
+	case depRelationOutgoing:
+		issueTargetClause = "depends_on_issue_id"
+		wispTargetClause = "depends_on_wisp_id"
+		filterCol = "issue_id"
+	case depRelationIncoming:
+		issueTargetClause = "issue_id"
+		wispTargetClause = "issue_id"
+		filterCol = "" // handled below per-table
+	}
+
+	var out []*types.Issue
+
+	{
+		var subqIssues string
+		var args []any
+		switch dir {
+		case depRelationOutgoing:
+			subqIssues = fmt.Sprintf(`
+				SELECT %s FROM dependencies WHERE %s = ? AND %s IS NOT NULL
+				UNION
+				SELECT %s FROM wisp_dependencies WHERE %s = ? AND %s IS NOT NULL
+			`, issueTargetClause, filterCol, issueTargetClause,
+				issueTargetClause, filterCol, issueTargetClause)
+			args = []any{issueID, issueID}
+		case depRelationIncoming:
+			subqIssues = `
+				SELECT issue_id FROM dependencies
+				WHERE depends_on_issue_id = ? OR depends_on_wisp_id = ?
+			`
+			args = []any{issueID, issueID}
+		}
+
+		q := fmt.Sprintf("SELECT %s FROM issues WHERE id IN (%s)", issueSelectColumns, subqIssues)
+		rows, err := r.runner.QueryContext(ctx, q, args...)
+		if err != nil {
+			return nil, fmt.Errorf("db: fetchRelatedIssues (issues side): %w", err)
+		}
+		for rows.Next() {
+			issue, err := scanIssue(rows)
+			if err != nil {
+				_ = rows.Close()
+				return nil, fmt.Errorf("db: fetchRelatedIssues: scan issue: %w", err)
+			}
+			out = append(out, issue)
+		}
+		_ = rows.Close()
+		if err := rows.Err(); err != nil {
+			return nil, fmt.Errorf("db: fetchRelatedIssues: iterate issues: %w", err)
+		}
+	}
+
+	{
+		var subqWisps string
+		var args []any
+		switch dir {
+		case depRelationOutgoing:
+			subqWisps = fmt.Sprintf(`
+				SELECT %s FROM dependencies WHERE %s = ? AND %s IS NOT NULL
+				UNION
+				SELECT %s FROM wisp_dependencies WHERE %s = ? AND %s IS NOT NULL
+			`, wispTargetClause, filterCol, wispTargetClause,
+				wispTargetClause, filterCol, wispTargetClause)
+			args = []any{issueID, issueID}
+		case depRelationIncoming:
+			subqWisps = `
+				SELECT issue_id FROM wisp_dependencies
+				WHERE depends_on_issue_id = ? OR depends_on_wisp_id = ?
+			`
+			args = []any{issueID, issueID}
+		}
+
+		q := fmt.Sprintf("SELECT %s FROM wisps WHERE id IN (%s)", issueSelectColumns, subqWisps)
+		rows, err := r.runner.QueryContext(ctx, q, args...)
+		if err != nil {
+			return nil, fmt.Errorf("db: fetchRelatedIssues (wisps side): %w", err)
+		}
+		for rows.Next() {
+			issue, err := scanIssue(rows)
+			if err != nil {
+				_ = rows.Close()
+				return nil, fmt.Errorf("db: fetchRelatedIssues: scan wisp: %w", err)
+			}
+			out = append(out, issue)
+		}
+		_ = rows.Close()
+		if err := rows.Err(); err != nil {
+			return nil, fmt.Errorf("db: fetchRelatedIssues: iterate wisps: %w", err)
+		}
+	}
+
+	return out, nil
 }
 
 func combineArgs(a, b []any) []any {
