@@ -10,7 +10,7 @@ endif
 endif
 
 .PHONY: all build test test-icu-path test-full-cgo test-regression test-upgrade test-cross-version test-migration bench bench-quick clean clean-test-tmp install install-force help check-up-to-date fmt fmt-check check-testing-short
-.PHONY: ci-pr-core ci-pr-policy ci-pr-lint ci-package-mcp ci-package-npm ci-website
+.PHONY: ci-pr-core ci-pr-embedded ci-pr-policy ci-pr-lint ci-package-mcp ci-package-npm ci-website
 
 # Default target
 all: build
@@ -82,6 +82,9 @@ test-full-cgo:
 
 ci-pr-core:
 	@./scripts/ci/pr-core.sh
+
+ci-pr-embedded:
+	@./scripts/ci/pr-embedded.sh
 
 ci-pr-policy:
 	@./scripts/ci/pr-policy.sh
