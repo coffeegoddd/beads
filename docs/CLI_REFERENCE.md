@@ -102,7 +102,12 @@ Reference for bd Latest. Generated from `bd help --all`.
   - [bd backup sync](#bd-backup-sync) — Push database to configured Dolt backup
 - [bd branch](#bd-branch) — List or create branches
 - [bd export](#bd-export) — Export issues to JSONL format
-- [bd federation](#bd-federation) — Manage peer-to-peer federation (requires CGO)
+- [bd federation](#bd-federation) — Manage peer-to-peer federation with other workspaces
+  - [bd federation add-peer](#bd-federation-add-peer) — Add a federation peer with optional SQL credentials
+  - [bd federation list-peers](#bd-federation-list-peers) — List configured federation peers
+  - [bd federation remove-peer](#bd-federation-remove-peer) — Remove a federation peer
+  - [bd federation status](#bd-federation-status) — Show federation sync status
+  - [bd federation sync](#bd-federation-sync) — Synchronize with a peer town
 - [bd import](#bd-import) — Import issues from a JSONL file or stdin into the database
 - [bd restore](#bd-restore) — Restore full history of a compacted issue from Dolt history
 - [bd vc](#bd-vc) — Version control operations
@@ -1780,7 +1785,7 @@ bd dep [issue-id] [flags]
 
 ```
   -b, --blocks string    Issue ID that this issue blocks (shorthand for: bd dep add <blocked> <blocker>)
-      --no-cycle-check   Skip cycle detection after adding (use for bulk wiring — run 'bd dep cycles' to verify afterwards)
+      --no-cycle-check   Skip per-edge cycle checks for speed (bulk wiring); bulk --file adds still run one final whole-graph check before commit
 ```
 
 #### bd dep add
@@ -1825,7 +1830,7 @@ bd dep add [issue-id] [depends-on-id] [flags]
       --blocked-by string   Issue ID that blocks the first issue (alternative to positional arg)
       --depends-on string   Issue ID that the first issue depends on (alias for --blocked-by)
       --file string         Read dependency edges from JSONL file, or '-' for stdin
-      --no-cycle-check      Skip cycle detection after adding (use for bulk wiring — run 'bd dep cycles' to verify afterwards)
+      --no-cycle-check      Skip per-edge cycle checks for speed (bulk wiring); bulk --file adds still run one final whole-graph check before commit
   -t, --type string         Dependency type (blocks|tracks|related|parent-child|discovered-from|until|caused-by|validates|relates-to|supersedes) (default "blocks")
 ```
 
@@ -2374,17 +2379,114 @@ bd export [flags]
 
 ### bd federation
 
-Federation commands require CGO and the Dolt storage backend.
-
-This binary was built without CGO support. To use federation features:
-  1. Use pre-built binaries from GitHub releases, or
-  2. Build from source with CGO enabled
+Manage peer-to-peer federation between Dolt-backed beads databases.
 
 Federation enables synchronized issue tracking across multiple workspaces,
 each maintaining their own Dolt database while sharing updates via remotes.
 
+Requires the Dolt storage backend.
+
 ```
 bd federation
+```
+
+#### bd federation add-peer
+
+Add a new federation peer remote with optional SQL user authentication.
+
+The URL can be:
+  - dolthub://org/repo      DoltHub hosted repository
+  - host:port/database      Direct dolt sql-server connection
+  - file:///path/to/repo    Local file path (for testing)
+
+Credentials are encrypted and stored locally. They are used automatically
+when syncing with the peer. If --user is provided without --password,
+you will be prompted for the password interactively.
+
+Examples:
+  bd federation add-peer town-beta dolthub://acme/town-beta-beads
+  bd federation add-peer town-gamma 192.168.1.100:3306/beads --user sync-bot
+  bd federation add-peer partner https://partner.example.com/beads --user admin --password secret
+
+```
+bd federation add-peer <name> <url> [flags]
+```
+
+**Flags:**
+
+```
+  -p, --password string      SQL password (prompted if --user set without --password)
+      --sovereignty string   Sovereignty tier (T1, T2, T3, T4)
+  -u, --user string          SQL username for authentication
+```
+
+#### bd federation list-peers
+
+List configured federation peers
+
+```
+bd federation list-peers
+```
+
+#### bd federation remove-peer
+
+Remove a federation peer
+
+```
+bd federation remove-peer <name>
+```
+
+#### bd federation status
+
+Show synchronization status with peer towns.
+
+Displays:
+  - Configured peers and their URLs
+  - Commits ahead/behind each peer
+  - Whether there are unresolved conflicts
+
+Examples:
+  bd federation status                    # Status for all peers
+  bd federation status --peer town-beta   # Status for specific peer
+
+```
+bd federation status [--peer name] [flags]
+```
+
+**Flags:**
+
+```
+      --peer string   Specific peer to check
+```
+
+#### bd federation sync
+
+Pull from and push to peer towns.
+
+Without --peer, syncs with all configured peers.
+With --peer, syncs only with the specified peer.
+
+Handles merge conflicts using the configured strategy:
+  --strategy ours    Keep local changes on conflict
+  --strategy theirs  Accept remote changes on conflict
+
+If no strategy is specified and conflicts occur, the sync will pause
+and report which tables have conflicts for manual resolution.
+
+Examples:
+  bd federation sync                      # Sync with all peers
+  bd federation sync --peer town-beta     # Sync with specific peer
+  bd federation sync --strategy theirs    # Auto-resolve using remote values
+
+```
+bd federation sync [--peer name] [flags]
+```
+
+**Flags:**
+
+```
+      --peer string       Specific peer to sync with
+      --strategy string   Conflict resolution strategy (ours|theirs)
 ```
 
 ### bd import
@@ -2427,6 +2529,14 @@ Timestamps (created_at, updated_at, started_at, closed_at) are preserved
 when present in the JSONL and otherwise filled in by the importer. The
 legacy "wisp" boolean is accepted as an alias for "ephemeral".
 
+By default rows whose updated_at is older than the local issue's are
+skipped (reported as stale_skipped_ids), so a routine import never rolls
+issues back. The guard is also enforced inside the upsert itself, so a
+local update that lands while the import is running is preserved rather
+than overwritten. To deliberately restore an older snapshot, pass
+--allow-stale, which imports every row even when it overwrites newer
+local state.
+
 EXAMPLES:
   bd import                        # Import from configured import.path
   bd import backup.jsonl           # Import from a specific file
@@ -2435,6 +2545,7 @@ EXAMPLES:
   cat issues.jsonl | bd import -   # Pipe JSONL from another tool
   bd import --dry-run              # Show what would be imported
   bd import --dedup                # Skip issues with duplicate titles
+  bd import --allow-stale old.jsonl # Restore an older snapshot (overwrites newer local rows)
   bd import --json                 # Structured output with created and skipped IDs
 
 ```
@@ -2444,6 +2555,7 @@ bd import [file|-] [flags]
 **Flags:**
 
 ```
+      --allow-stale    Import rows even when older than the local issue (required to restore an older snapshot)
       --dedup          Skip lines whose title matches an existing open issue
       --dry-run        Show what would be imported without importing
   -i, --input string   Read JSONL from a specific file
