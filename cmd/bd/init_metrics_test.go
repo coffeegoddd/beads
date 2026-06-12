@@ -290,7 +290,7 @@ func TestInitBootstrapsUserConfigWhenMissing(t *testing.T) {
 	}
 }
 
-func TestInitLeavesExistingUserConfigUntouched(t *testing.T) {
+func TestInitPreservesExistingMetricsValuesAndFillsMissingLeaves(t *testing.T) {
 	home, err := testTempDir("bd-bootstrap-existing-*")
 	if err != nil {
 		t.Fatalf("temp home: %v", err)
@@ -301,7 +301,7 @@ func TestInitLeavesExistingUserConfigUntouched(t *testing.T) {
 		t.Fatalf("mkdir: %v", err)
 	}
 	path := filepath.Join(dir, "config.yaml")
-	original := []byte("# user customizations\nmetrics:\n  endpoint: https://example.invalid/custom\n")
+	original := []byte("metrics:\n  endpoint: https://example.invalid/custom\n")
 	if err := os.WriteFile(path, original, 0o644); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
@@ -312,8 +312,12 @@ func TestInitLeavesExistingUserConfigUntouched(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read: %v", err)
 	}
-	if string(got) != string(original) {
-		t.Errorf("existing user config was modified.\nwant: %q\ngot:  %q", original, got)
+	body := string(got)
+	if !strings.Contains(body, "https://example.invalid/custom") {
+		t.Errorf("user-set endpoint was clobbered.\nfile: %q", body)
+	}
+	if !strings.Contains(body, "disabled:") {
+		t.Errorf("missing metrics.disabled was not filled in.\nfile: %q", body)
 	}
 }
 

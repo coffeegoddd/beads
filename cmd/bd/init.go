@@ -71,10 +71,6 @@ Non-interactive mode (--non-interactive or BD_NON_INTERACTIVE=1):
   • --contributor and --team flags are rejected (wizards require interaction)
   Also auto-detected when stdin is not a terminal or CI=true is set.`,
 	RunE: func(cmd *cobra.Command, _ []string) (retErr error) {
-		if err := ensureUserConfigExists(); err != nil {
-			WarnError("failed to bootstrap user config: %v", err)
-		}
-
 		prefix, _ := cmd.Flags().GetString("prefix")
 		quiet, _ := cmd.Flags().GetBool("quiet")
 		contributor, _ := cmd.Flags().GetBool("contributor")

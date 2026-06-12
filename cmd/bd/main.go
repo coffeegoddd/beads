@@ -643,6 +643,12 @@ var rootCmd = &cobra.Command{
 			debug.Logf("warning: telemetry init failed: %v", err)
 		}
 
+		if cmd.Name() != metrics.SendMetricsSubcommand {
+			if err := metrics.EnsureUserConfigDefaults(); err != nil {
+				return HandleError("%v", err)
+			}
+		}
+
 		if _, err := metrics.Init(Version, resolveMetricsEnabled(), resolveMetricsEndpoint()); err != nil {
 			debug.Logf("warning: metrics init failed: %v", err)
 		}
