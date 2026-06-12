@@ -23,7 +23,7 @@ type metricsEvent struct {
 	} `json:"events"`
 }
 
-func readSingleInitEvent(t *testing.T, home string) metricsEvent {
+func readInitEvent(t *testing.T, home, expectedCommand string) metricsEvent {
 	t.Helper()
 	dir := filepath.Join(home, ".beads", "eventsData")
 	entries, err := os.ReadDir(dir)
@@ -48,11 +48,11 @@ func readSingleInitEvent(t *testing.T, home string) metricsEvent {
 		if err := json.Unmarshal(body, &got); err != nil {
 			t.Fatalf("unmarshal evtq %s: %v\n%s", name, err, body)
 		}
-		if got.commandAttr() == "init" {
+		if got.commandAttr() == expectedCommand {
 			return got
 		}
 	}
-	t.Fatalf("no .evtq with command=init among %v", evtqs)
+	t.Fatalf("no .evtq with command=%s among %v", expectedCommand, evtqs)
 	return metricsEvent{}
 }
 
@@ -103,29 +103,29 @@ func runBdInitForMetrics(t *testing.T, home string, args ...string) {
 
 func TestInitMetricsEmittedPerDoltMode(t *testing.T) {
 	cases := []struct {
-		name             string
-		extraArgs        []string
-		extraEnv         []string
-		expectedDoltMode string
+		name            string
+		extraArgs       []string
+		extraEnv        []string
+		expectedCommand string
 	}{
 		{
-			name:             "embedded_default",
-			expectedDoltMode: "embedded",
+			name:            "embedded_default",
+			expectedCommand: "init-embedded",
 		},
 		{
-			name:             "server_via_flag",
-			extraArgs:        []string{"--server"},
-			expectedDoltMode: "server",
+			name:            "server_via_flag",
+			extraArgs:       []string{"--server"},
+			expectedCommand: "init-server",
 		},
 		{
-			name:             "shared_server_via_flag",
-			extraArgs:        []string{"--shared-server"},
-			expectedDoltMode: "shared-server",
+			name:            "shared_server_via_flag",
+			extraArgs:       []string{"--shared-server"},
+			expectedCommand: "init-shared-server",
 		},
 		{
-			name:             "proxied_server_via_flag",
-			extraArgs:        []string{"--proxied-server"},
-			expectedDoltMode: "proxied-server",
+			name:            "proxied_server_via_flag",
+			extraArgs:       []string{"--proxied-server"},
+			expectedCommand: "init-proxied-server",
 		},
 	}
 
@@ -137,7 +137,7 @@ func TestInitMetricsEmittedPerDoltMode(t *testing.T) {
 				t.Fatalf("temp home: %v", err)
 			}
 			runBdInitForMetrics(t, home, tc.extraArgs...)
-			evt := readSingleInitEvent(t, home)
+			evt := readInitEvent(t, home, tc.expectedCommand)
 
 			if evt.AppName != "beads" {
 				t.Errorf("app_name = %q, want %q", evt.AppName, "beads")
@@ -148,11 +148,11 @@ func TestInitMetricsEmittedPerDoltMode(t *testing.T) {
 			if evt.Events[0].Name != "cli_command" {
 				t.Errorf("event name = %q, want %q", evt.Events[0].Name, "cli_command")
 			}
-			if got, _ := evt.attr("command"); got != "init" {
-				t.Errorf("command attr = %q, want %q", got, "init")
+			if got, _ := evt.attr("command"); got != tc.expectedCommand {
+				t.Errorf("command attr = %q, want %q", got, tc.expectedCommand)
 			}
-			if got, _ := evt.attr("dolt_mode"); got != tc.expectedDoltMode {
-				t.Errorf("dolt_mode attr = %q, want %q", got, tc.expectedDoltMode)
+			if got, ok := evt.attr("dolt_mode"); ok {
+				t.Errorf("dolt_mode attr should no longer be set, got %q", got)
 			}
 		})
 	}

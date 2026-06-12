@@ -124,8 +124,7 @@ Non-interactive mode (--non-interactive or BD_NON_INTERACTIVE=1):
 			initProxiedServer = true
 		}
 
-		initEvt := metrics.NewCommandEvent("init")
-		initEvt.SetAttribute("dolt_mode", resolveInitDoltMode(initProxiedServer, sharedServer, initServerMode))
+		initEvt := metrics.NewCommandEvent("init-" + resolveInitDoltMode(initProxiedServer, sharedServer, initServerMode))
 		defer func() {
 			if c := metrics.Global(); c != nil {
 				c.CloseEventAndAdd(initEvt)
