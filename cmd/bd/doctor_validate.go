@@ -17,13 +17,17 @@ type validateCheckResult struct {
 }
 
 func runValidateCheck(path string) error {
-	if !runValidateCheckInner(path) {
+	ok, err := runValidateCheckInner(path)
+	if err != nil {
+		return err
+	}
+	if !ok {
 		return SilentExit()
 	}
 	return nil
 }
 
-func runValidateCheckInner(path string) bool {
+func runValidateCheckInner(path string) (bool, error) {
 	checks := collectValidateChecks(path)
 
 	// Apply fixes if --fix is set, then re-check to reflect post-fix state
@@ -47,8 +51,10 @@ func runValidateCheckInner(path string) bool {
 		for _, cr := range checks {
 			result.Checks = append(result.Checks, cr.check)
 		}
-		outputJSON(result)
-		return overallOK
+		if err := outputJSON(result); err != nil {
+			return overallOK, err
+		}
+		return overallOK, nil
 	}
 
 	// Human-readable output
@@ -69,7 +75,7 @@ func runValidateCheckInner(path string) bool {
 		fmt.Printf("%s\n", ui.RenderPass("✓ All data-integrity checks passed"))
 	}
 
-	return overallOK
+	return overallOK, nil
 }
 
 // collectValidateChecks runs the four data-integrity checks.

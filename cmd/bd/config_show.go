@@ -41,7 +41,7 @@ Examples:
   bd config show
   bd config show --json
   bd config show --source config.yaml`,
-	Run: func(cmd *cobra.Command, _ []string) {
+	RunE: func(cmd *cobra.Command, _ []string) error {
 		evt := metrics.NewCommandEvent("config-show")
 		defer func() {
 			if c := metrics.Global(); c != nil {
@@ -58,16 +58,16 @@ Examples:
 		}
 
 		if jsonOutput {
-			outputJSON(entries)
-			return
+			return outputJSON(entries)
 		}
 
 		if len(entries) == 0 {
 			fmt.Println("No configuration found")
-			return
+			return nil
 		}
 
 		printConfigEntries(entries)
+		return nil
 	},
 }
 

@@ -250,8 +250,7 @@ Examples:
 			case "artifacts":
 				return runArtifactsCheck(absPath, doctorClean, doctorYes)
 			case "conventions":
-				runConventionsCheck(absPath)
-				return nil
+				return runConventionsCheck(absPath)
 			default:
 				return HandleErrorWithHint(fmt.Sprintf("unknown check %q", doctorCheckFlag), "Available checks: artifacts, conventions, pollution, validate")
 			}

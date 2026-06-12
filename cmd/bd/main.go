@@ -1043,7 +1043,7 @@ var rootCmd = &cobra.Command{
 			// mode and would nil-panic mid-command (bd-6dnrw.44 item 1).
 			// Reject before spawning the proxy/dolt processes.
 			if !commandSupportsProxiedServer(cmd) {
-				FatalError("'bd %s' is not supported in proxied-server mode yet (supported: create, list, doctor, init; use 'bd list --ready' for ready work)", strings.TrimPrefix(cmd.CommandPath(), "bd "))
+				return HandleError("'bd %s' is not supported in proxied-server mode yet (supported: create, list, doctor, init; use 'bd list --ready' for ready work)", strings.TrimPrefix(cmd.CommandPath(), "bd "))
 			}
 			p, err := newProxiedServerUOWProvider(rootCtx, beadsDir)
 			if err != nil {
@@ -1118,7 +1118,6 @@ var rootCmd = &cobra.Command{
 				}
 				os.Exit(1)
 			}
-			FatalError("failed to open database: %v", err)
 			return HandleError("failed to open database: %v", err)
 		}
 
@@ -1214,7 +1213,7 @@ var rootCmd = &cobra.Command{
 						params.MessageOverride = formatDoltSweepCommitMessage(cmd.Name(), getActor())
 					}
 					if err := maybeAutoCommit(rootCtx, params); err != nil {
-					return HandleError("dolt auto-commit failed: %v", err)
+						return HandleError("dolt auto-commit failed: %v", err)
 					}
 				}
 			}

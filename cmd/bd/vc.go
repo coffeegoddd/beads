@@ -78,13 +78,13 @@ Examples:
 				// stays uncommitted otherwise, and the merged-in writes
 				// bypassed every is_blocked hook (bd-578h9.11).
 				if err := store.Commit(ctx, fmt.Sprintf("Resolve merge conflicts from %s using %s strategy", branchName, vcMergeStrategy)); err != nil {
-					FatalErrorRespectJSON("conflicts resolved but commit failed: %v", err)
+					return HandleErrorRespectJSON("conflicts resolved but commit failed: %v", err)
 				}
 				if rs, ok := store.(interface {
 					RecomputeBlockedAfterMerge(ctx context.Context, fromCommit string) error
 				}); ok {
 					if err := rs.RecomputeBlockedAfterMerge(ctx, preHead); err != nil {
-						FatalErrorRespectJSON("conflicts resolved but is_blocked recompute failed: %v", err)
+						return HandleErrorRespectJSON("conflicts resolved but is_blocked recompute failed: %v", err)
 					}
 				}
 				if jsonOutput {

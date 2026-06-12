@@ -81,8 +81,7 @@ func runListProxiedSearch(_ *cobra.Command, ctx context.Context, in listInput) e
 		if err != nil {
 			return err
 		}
-		emitProxiedListJSONResult(page.Items, in, page.HasMore)
-		return nil
+		return emitProxiedListJSONResult(page.Items, in, page.HasMore)
 	}
 
 	page, err := uw.IssueUseCase().SearchIssues(ctx, "", filter)
@@ -160,8 +159,7 @@ func runListProxiedReady(_ *cobra.Command, ctx context.Context, in listInput) er
 		if err != nil {
 			return err
 		}
-		emitProxiedListJSONResult(page.Items, in, page.HasMore)
-		return nil
+		return emitProxiedListJSONResult(page.Items, in, page.HasMore)
 	}
 
 	page, err := uw.IssueUseCase().GetReadyWork(ctx, wf)
@@ -270,17 +268,22 @@ func isProxiedIssueNotFound(err error) bool {
 	return errors.Is(err, sql.ErrNoRows) || dberrors.IsTableNotExist(err)
 }
 
-func emitProxiedListJSONResult(iwc []*types.IssueWithCounts, in listInput, hasMore bool) {
+func emitProxiedListJSONResult(iwc []*types.IssueWithCounts, in listInput, hasMore bool) error {
 	sortIssuesWithCounts(iwc, in.sortBy, in.reverse)
 	if iwc == nil {
 		iwc = []*types.IssueWithCounts{}
 	}
+	var err error
 	if in.skipLabels {
-		outputJSON(newSkipLabelsListJSONResponse(iwc))
+		err = outputJSON(newSkipLabelsListJSONResponse(iwc))
 	} else {
-		outputJSON(iwc)
+		err = outputJSON(iwc)
+	}
+	if err != nil {
+		return err
 	}
 	printTruncationHint(hasMore, in.effectiveLimit)
+	return nil
 }
 
 func loadDepsForIssues(ctx context.Context, uw uow.UnitOfWork, issues []*types.Issue) (map[string][]*types.Dependency, error) {

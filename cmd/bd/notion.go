@@ -248,7 +248,8 @@ func runNotionStatus(cmd *cobra.Command, _ []string) error {
 		if jsonOutput {
 			return writeNotionJSON(cmd, result)
 		}
-		return renderNotionStatus(cmd, auth, cfg, &result)
+		renderNotionStatus(cmd, auth, cfg, &result)
+		return nil
 	}
 
 	client := newNotionStatusClient(auth.Token)
@@ -283,7 +284,8 @@ func runNotionStatus(cmd *cobra.Command, _ []string) error {
 	if jsonOutput {
 		return writeNotionJSON(cmd, result)
 	}
-	return renderNotionStatus(cmd, auth, cfg, &result)
+	renderNotionStatus(cmd, auth, cfg, &result)
+	return nil
 }
 
 func runNotionInit(cmd *cobra.Command, _ []string) error {
@@ -389,7 +391,7 @@ func runNotionConnect(cmd *cobra.Command, _ []string) error {
 	return nil
 }
 
-func renderNotionStatus(cmd *cobra.Command, auth *notion.ResolvedAuth, cfg notionConfig, result *notion.StatusResponse) error {
+func renderNotionStatus(cmd *cobra.Command, auth *notion.ResolvedAuth, cfg notionConfig, result *notion.StatusResponse) {
 	out := cmd.OutOrStdout()
 	_, _ = fmt.Fprintln(out, "Notion Configuration")
 	_, _ = fmt.Fprintln(out, "====================")
@@ -423,7 +425,6 @@ func renderNotionStatus(cmd *cobra.Command, auth *notion.ResolvedAuth, cfg notio
 			_, _ = fmt.Fprintf(out, "Schema: missing %s\n", strings.Join(result.Schema.Missing, ", "))
 		}
 	}
-	return nil
 }
 
 func runNotionSync(cmd *cobra.Command, _ []string) error {
@@ -514,10 +515,11 @@ func runNotionSync(cmd *cobra.Command, _ []string) error {
 	if jsonOutput {
 		return writeNotionJSON(cmd, result)
 	}
-	return renderNotionSyncResult(cmd, result)
+	renderNotionSyncResult(cmd, result)
+	return nil
 }
 
-func renderNotionSyncResult(cmd *cobra.Command, result *tracker.SyncResult) error {
+func renderNotionSyncResult(cmd *cobra.Command, result *tracker.SyncResult) {
 	out := cmd.OutOrStdout()
 	if notionSyncDryRun {
 		_, _ = fmt.Fprintln(out, "Dry run mode")
@@ -543,7 +545,6 @@ func renderNotionSyncResult(cmd *cobra.Command, result *tracker.SyncResult) erro
 	if notionSyncDryRun {
 		_, _ = fmt.Fprintln(out, "Run without --dry-run to apply changes")
 	}
-	return nil
 }
 
 func summarizeNotionSyncWarnings(warnings []string) []string {

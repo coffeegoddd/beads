@@ -174,7 +174,9 @@ Examples:
 
 		if beadsDir == "" {
 			if jsonOutput {
-				outputJSON(noWorkspaceBootstrapPayload())
+				if err := outputJSON(noWorkspaceBootstrapPayload()); err != nil {
+					return err
+				}
 				return SilentExit()
 			}
 			fmt.Fprintf(os.Stderr, "Hint: %s\n", diagHint())
@@ -208,7 +210,9 @@ Examples:
 		plan := detectBootstrapAction(beadsDir, cfg)
 
 		if jsonOutput {
-			outputJSON(plan)
+			if err := outputJSON(plan); err != nil {
+				return err
+			}
 			if plan.Action == "none" || dryRun {
 				return nil
 			}

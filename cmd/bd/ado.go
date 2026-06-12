@@ -379,8 +379,7 @@ func runADOStatus(cmd *cobra.Command, _ []string) error {
 		} else {
 			result.Configured = true
 		}
-		outputJSON(result)
-		return nil
+		return outputJSON(result)
 	}
 
 	out := cmd.OutOrStdout()
@@ -438,8 +437,7 @@ func runADOProjects(cmd *cobra.Command, _ []string) error {
 	}
 
 	if jsonOutput {
-		outputJSON(projects)
-		return nil
+		return outputJSON(projects)
 	}
 
 	_, _ = fmt.Fprintln(out, "Azure DevOps Projects")
@@ -689,8 +687,7 @@ func runADOSync(cmd *cobra.Command, _ []string) error {
 			syncResult.ReconcileDeleted = len(reconcileResult.Deleted)
 			syncResult.ReconcileDenied = len(reconcileResult.Denied)
 		}
-		outputJSON(syncResult)
-		return nil
+		return outputJSON(syncResult)
 	}
 
 	// Human-readable output

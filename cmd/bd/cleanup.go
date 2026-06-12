@@ -120,7 +120,9 @@ SEE ALSO:
 				if wispOnly {
 					result.Ephemeral = true
 				}
-				outputJSON(result)
+				if err := outputJSON(result); err != nil {
+					return err
+				}
 			} else {
 				msg := "No closed issues to delete"
 				if wispOnly && olderThanDays > 0 {

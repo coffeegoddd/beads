@@ -72,8 +72,7 @@ var showCmd = &cobra.Command{
 		}
 
 		if asOfRef != "" {
-			showIssueAsOf(ctx, args, asOfRef, shortMode)
-			return nil
+			return showIssueAsOf(ctx, args, asOfRef, shortMode)
 		}
 
 		if watchMode {
@@ -100,13 +99,11 @@ var showCmd = &cobra.Command{
 		}
 
 		if showRefs {
-			showIssueRefs(ctx, args, jsonOutput)
-			return nil
+			return showIssueRefs(ctx, args, jsonOutput)
 		}
 
 		if showChildren {
-			showIssueChildren(ctx, args, jsonOutput, shortMode)
-			return nil
+			return showIssueChildren(ctx, args, jsonOutput, shortMode)
 		}
 
 		// Direct mode - use routed resolution for cross-repo lookups

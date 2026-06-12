@@ -20,7 +20,7 @@ func ensureUserConfigExists() error {
 		return fmt.Errorf("mkdir user config: %w", err)
 	}
 	body := []byte("metrics:\n  disabled: false\n  endpoint: " + metrics.DefaultEndpoint + "\n")
-	if err := os.WriteFile(path, body, 0o644); err != nil {
+	if err := os.WriteFile(path, body, 0o600); err != nil {
 		return fmt.Errorf("write user config: %w", err)
 	}
 	return nil

@@ -96,12 +96,11 @@ After adding, run 'bd backup sync' to push your data.`,
 		commandDidWrite.Store(true)
 
 		if jsonOutput {
-			outputJSON(map[string]interface{}{
+			return outputJSON(map[string]interface{}{
 				"backup_url":  backupURL,
 				"backup_name": defaultDoltBackupName,
 				"initialized": true,
 			})
-			return nil
 		}
 
 		fmt.Printf("Backup destination configured: %s\n", backupURL)
@@ -164,11 +163,10 @@ Run 'bd backup init <path>' first to configure a destination.`,
 		}
 
 		if jsonOutput {
-			outputJSON(map[string]interface{}{
+			return outputJSON(map[string]interface{}{
 				"synced":   true,
 				"duration": elapsed.String(),
 			})
-			return nil
 		}
 
 		fmt.Printf("Backup synced in %s\n", elapsed.Round(time.Millisecond))
@@ -441,8 +439,7 @@ backup configuration. The backup data at the destination is not deleted.`,
 		}
 
 		if jsonOutput {
-			outputJSON(map[string]interface{}{"removed": true})
-			return nil
+			return outputJSON(map[string]interface{}{"removed": true})
 		}
 
 		fmt.Println("Backup destination removed.")
