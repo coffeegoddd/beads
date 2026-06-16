@@ -17,7 +17,7 @@ import (
 )
 
 func TestIssueIDCompletion(t *testing.T) {
-	t.Skip("failing on dolthub/beads main; needs investigation")
+	t.Skip("currently fails, needs investigation")
 	// Save original store and restore after test
 	originalStore := store
 	originalRootCtx := rootCtx
@@ -220,7 +220,7 @@ func TestIssueIDCompletion_NoStore(t *testing.T) {
 }
 
 func TestIssueIDCompletion_UsesWorktreeFallbackWhenStoreNil(t *testing.T) {
-	t.Skip("failing on dolthub/beads main; needs investigation")
+	t.Skip("currently fails, needs investigation")
 	originalStore := store
 	originalDBPath := dbPath
 	originalRootCtx := rootCtx

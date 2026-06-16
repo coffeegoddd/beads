@@ -12,7 +12,7 @@ import (
 )
 
 func TestReset_WorktreeFindsBeadsDir(t *testing.T) {
-	t.Skip("failing on dolthub/beads main; needs investigation")
+	t.Skip("currently fails, needs investigation")
 	tmpDir, err := os.MkdirTemp("", "beads-reset-worktree-test-*")
 	if err != nil {
 		t.Fatal(err)
@@ -102,7 +102,7 @@ func TestReset_WorktreeFindsBeadsDir(t *testing.T) {
 }
 
 func TestReset_WorktreeNoBeadsReturnsEmpty(t *testing.T) {
-	t.Skip("failing on dolthub/beads main; needs investigation")
+	t.Skip("currently fails, needs investigation")
 	tmpDir, err := os.MkdirTemp("", "beads-reset-no-beads-test-*")
 	if err != nil {
 		t.Fatal(err)
@@ -152,7 +152,7 @@ func TestReset_WorktreeNoBeadsReturnsEmpty(t *testing.T) {
 }
 
 func TestReset_WorktreeSubdirFindsBeadsDir(t *testing.T) {
-	t.Skip("failing on dolthub/beads main; needs investigation")
+	t.Skip("currently fails, needs investigation")
 	tmpDir, err := os.MkdirTemp("", "beads-reset-subdir-test-*")
 	if err != nil {
 		t.Fatal(err)

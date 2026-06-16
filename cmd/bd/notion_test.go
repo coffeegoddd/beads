@@ -396,7 +396,7 @@ func TestValidateNotionConfigMessages(t *testing.T) {
 }
 
 func TestGetNotionConfigReadsDBPathWhenStoreUnset(t *testing.T) {
-	t.Skip("failing on dolthub/beads main; needs investigation")
+	t.Skip("currently fails, needs investigation")
 	saveAndRestoreGlobals(t)
 	tempDir := t.TempDir()
 	testDBPath := filepath.Join(tempDir, "test.db")

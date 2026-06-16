@@ -13,7 +13,7 @@ import (
 )
 
 func TestCheckRepoFingerprint_UsesTargetRepoOutsideCWD(t *testing.T) {
-	t.Skip("failing on dolthub/beads main; needs investigation")
+	t.Skip("currently fails, needs investigation")
 	outerRepo := t.TempDir()
 	targetRepo := t.TempDir()
 

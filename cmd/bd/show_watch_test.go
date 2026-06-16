@@ -116,7 +116,7 @@ func TestWatchIssueDetectsStatusChange(t *testing.T) {
 // TestWatchIssueDetectsFieldUpdate verifies that non-status field updates
 // (e.g., title change) are also detected by the polling snapshot.
 func TestWatchIssueDetectsFieldUpdate(t *testing.T) {
-	t.Skip("failing on dolthub/beads main; needs investigation")
+	t.Skip("currently fails, needs investigation")
 	t.Parallel()
 	ensureTestMode(t)
 

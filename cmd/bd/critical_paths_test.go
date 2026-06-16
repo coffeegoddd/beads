@@ -14,7 +14,7 @@ import (
 
 // TestBurnWisps tests direct wisp deletion via burnWisps.
 func TestBurnWisps(t *testing.T) {
-	t.Skip("failing on dolthub/beads main; needs investigation")
+	t.Skip("currently fails, needs investigation")
 	t.Parallel()
 	ctx := context.Background()
 	tmpDir := t.TempDir()

@@ -14,7 +14,7 @@ import (
 )
 
 func TestImportFromLocalJSONL(t *testing.T) {
-	t.Skip("failing on dolthub/beads main; needs investigation")
+	t.Skip("currently fails, needs investigation")
 	skipIfNoDolt(t)
 
 	t.Run("imports issues from JSONL file", func(t *testing.T) {
@@ -610,7 +610,7 @@ func TestImportFromLocalJSONL(t *testing.T) {
 }
 
 func TestImportFromLocalJSONL_LegacyFormats(t *testing.T) {
-	t.Skip("failing on dolthub/beads main; needs investigation")
+	t.Skip("currently fails, needs investigation")
 	skipIfNoDolt(t)
 
 	t.Run("numeric comment IDs from pre-v1.0", func(t *testing.T) {
