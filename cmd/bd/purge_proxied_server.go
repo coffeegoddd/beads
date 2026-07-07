@@ -142,7 +142,7 @@ func runPurgeOrPruneProxied(cmd *cobra.Command, scope purgeScope) error {
 		return HandleErrorRespectJSON("commit: %v", err)
 	}
 
-	return emitProxiedPruneResult(scope, result, pinnedCount, referencedCount)
+	return emitProxiedPruneResult(scope, result, pinnedCount, referencedCount, referencedSample)
 }
 
 // buildReferencedSetProxied mirrors buildReferencedSet using the domain use
@@ -315,7 +315,7 @@ func emitProxiedPruneConfirm(scope purgeScope, issueIDs []string, olderThan, pat
 		fmt.Sprintf("Use --force to confirm or --dry-run to preview.\n  %s", hint))
 }
 
-func emitProxiedPruneResult(scope purgeScope, result domain.DeleteIssuesResult, pinnedCount, referencedCount int) error {
+func emitProxiedPruneResult(scope purgeScope, result domain.DeleteIssuesResult, pinnedCount, referencedCount int, referencedSample []string) error {
 	if jsonOutput {
 		stats := map[string]interface{}{
 			scope.countKey: result.DeletedCount,
@@ -329,6 +329,9 @@ func emitProxiedPruneResult(scope purgeScope, result domain.DeleteIssuesResult, 
 		if scope.cmdName == "prune" {
 			stats["referenced_skipped"] = referencedCount
 			stats["referenced_count"] = referencedCount
+			if len(referencedSample) > 0 {
+				stats["referenced_ids_sample"] = referencedSample
+			}
 		}
 		return outputJSON(stats)
 	}

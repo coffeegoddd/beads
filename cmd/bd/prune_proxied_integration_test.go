@@ -130,6 +130,10 @@ func TestProxiedServerPrune(t *testing.T) {
 		a := bdProxiedCreate(t, bd, p.dir, "JSON prune A")
 		b := bdProxiedCreate(t, bd, p.dir, "JSON prune B")
 		bdProxiedClose(t, bd, p.dir, a.ID, b.ID)
+		referenced := bdProxiedCreate(t, bd, p.dir, "JSON cited decision")
+		bdProxiedCreate(t, bd, p.dir, "JSON open citing bead",
+			"--description", "per "+referenced.ID+" we decided X")
+		bdProxiedClose(t, bd, p.dir, referenced.ID)
 		stdout, stderr, err := bdProxiedRunBuffers(t, bd, p.dir, "prune", "--json", "--pattern", "*", "--force")
 		if err != nil {
 			t.Fatalf("bd prune --json failed: %v\nstdout:\n%s\nstderr:\n%s", err, stdout, stderr)
@@ -144,6 +148,13 @@ func TestProxiedServerPrune(t *testing.T) {
 		}
 		if got, ok := stats["pruned_count"].(float64); !ok || int(got) != 2 {
 			t.Errorf("pruned_count: got %v, want 2", stats["pruned_count"])
+		}
+		if got, ok := stats["referenced_skipped"].(float64); !ok || int(got) != 1 {
+			t.Errorf("referenced_skipped: got %v, want 1", stats["referenced_skipped"])
+		}
+		sample, ok := stats["referenced_ids_sample"].([]any)
+		if !ok || len(sample) != 1 || sample[0] != referenced.ID {
+			t.Errorf("referenced_ids_sample: got %v, want [%s]", stats["referenced_ids_sample"], referenced.ID)
 		}
 	})
 
