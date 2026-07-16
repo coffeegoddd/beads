@@ -714,11 +714,8 @@ func (u *issueUseCaseImpl) create(ctx context.Context, params CreateIssueParams,
 	}
 
 	if params.WaitsFor != nil {
-		gate := params.WaitsFor.Gate
-		if gate == "" {
-			gate = types.WaitsForAllChildren
-		}
-		metaJSON, err := json.Marshal(types.WaitsForMeta{Gate: gate})
+		// Spawner identity is the depends_on_id; metadata carries the gate.
+		metaJSON, err := types.BuildWaitsForMeta(params.WaitsFor.Gate, "")
 		if err != nil {
 			return result, fmt.Errorf("create: marshal waits-for meta: %w", err)
 		}
@@ -726,7 +723,7 @@ func (u *issueUseCaseImpl) create(ctx context.Context, params CreateIssueParams,
 			IssueID:     issue.ID,
 			DependsOnID: params.WaitsFor.SpawnerID,
 			Type:        types.DepWaitsFor,
-			Metadata:    string(metaJSON),
+			Metadata:    metaJSON,
 		}
 		if err := u.depRepo.Insert(ctx, dep, actor, DepInsertOpts{UseWispsTable: useWisp}); err != nil {
 			return result, fmt.Errorf("create: add waits-for: %w", err)
