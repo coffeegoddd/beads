@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/steveyegge/beads/internal/storage/schema"
+	"github.com/steveyegge/beads/schema"
 )
 
 // handleRemoteMigrateGateJSON renders the #4259 remote-migrate gate error as a

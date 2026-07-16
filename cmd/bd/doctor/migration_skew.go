@@ -11,7 +11,7 @@ import (
 	"github.com/steveyegge/beads/internal/configfile"
 	"github.com/steveyegge/beads/internal/storage/dberrors"
 	"github.com/steveyegge/beads/internal/storage/embeddeddolt"
-	"github.com/steveyegge/beads/internal/storage/schema"
+	"github.com/steveyegge/beads/schema"
 )
 
 const migrationContentSkewCheckName = "Migration Content Skew"

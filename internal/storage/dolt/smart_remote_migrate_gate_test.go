@@ -9,8 +9,8 @@ import (
 	"testing"
 
 	"github.com/steveyegge/beads/internal/storage/doltutil"
-	"github.com/steveyegge/beads/internal/storage/schema"
 	"github.com/steveyegge/beads/internal/storage/versioncontrolops"
+	"github.com/steveyegge/beads/schema"
 )
 
 // TestDoltNew_SmartRemoteMigrateGate_RealDolt exercises the state-aware smart

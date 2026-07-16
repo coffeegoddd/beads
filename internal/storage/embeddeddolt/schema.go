@@ -3,7 +3,7 @@
 package embeddeddolt
 
 import (
-	"github.com/steveyegge/beads/internal/storage/schema"
+	"github.com/steveyegge/beads/schema"
 )
 
 func LatestVersion() int {

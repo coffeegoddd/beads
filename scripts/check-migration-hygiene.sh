@@ -34,7 +34,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 cd "$REPO_ROOT"
 
-MIG_DIR="internal/storage/schema/migrations"
+MIG_DIR="schema/migrations"
 ALLOWLIST="$MIG_DIR/nondeterminism-allowlist.txt"
 fail=0
 

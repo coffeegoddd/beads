@@ -7,7 +7,7 @@ import (
 	"testing"
 
 	"github.com/steveyegge/beads/internal/storage/rowid"
-	"github.com/steveyegge/beads/internal/storage/schema"
+	"github.com/steveyegge/beads/schema"
 )
 
 // auxRekeyMarkerVersion mirrors the unexported clone-local ignored-migration

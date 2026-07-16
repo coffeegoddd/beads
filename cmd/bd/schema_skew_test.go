@@ -8,7 +8,7 @@ import (
 	"testing"
 
 	"github.com/steveyegge/beads/internal/config"
-	"github.com/steveyegge/beads/internal/storage/schema"
+	"github.com/steveyegge/beads/schema"
 )
 
 // TestHandleSchemaSkewJSON_Shape verifies the JSON written to stderr by

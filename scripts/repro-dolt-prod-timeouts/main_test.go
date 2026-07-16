@@ -17,8 +17,8 @@ import (
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/steveyegge/beads/internal/storage/depid"
 	"github.com/steveyegge/beads/internal/storage/doltutil"
-	"github.com/steveyegge/beads/internal/storage/schema"
 	"github.com/steveyegge/beads/internal/testutil"
+	"github.com/steveyegge/beads/schema"
 )
 
 func TestIsDriverReadTimeout(t *testing.T) {

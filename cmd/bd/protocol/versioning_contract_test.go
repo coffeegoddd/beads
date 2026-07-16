@@ -28,7 +28,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/steveyegge/beads/internal/storage/schema"
+	"github.com/steveyegge/beads/schema"
 )
 
 // TestProtocol_V3_SchemaSkewRefusal pins §V3: a database ahead of the binary is

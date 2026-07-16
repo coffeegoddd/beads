@@ -36,12 +36,12 @@ import (
 	mysqlstore "github.com/steveyegge/beads/internal/storage/mysql"
 	"github.com/steveyegge/beads/internal/storage/pgdialect"
 	pgstore "github.com/steveyegge/beads/internal/storage/postgres"
-	"github.com/steveyegge/beads/internal/storage/schema"
 	sqlitestore "github.com/steveyegge/beads/internal/storage/sqlite"
 	"github.com/steveyegge/beads/internal/storage/uow"
 	"github.com/steveyegge/beads/internal/telemetry"
 	"github.com/steveyegge/beads/internal/ui"
 	"github.com/steveyegge/beads/internal/utils"
+	"github.com/steveyegge/beads/schema"
 	"go.opentelemetry.io/otel/attribute"
 	oteltrace "go.opentelemetry.io/otel/trace"
 )

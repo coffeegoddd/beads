@@ -9,7 +9,7 @@ import (
 	"testing"
 
 	"github.com/steveyegge/beads/internal/storage/embeddeddolt"
-	"github.com/steveyegge/beads/internal/storage/schema"
+	"github.com/steveyegge/beads/schema"
 )
 
 // TestEmbeddedRemoteMigrateGate_BlocksReopen verifies that the #4259

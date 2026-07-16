@@ -8,7 +8,7 @@ import (
 	"testing"
 
 	"github.com/steveyegge/beads/internal/storage/depid"
-	"github.com/steveyegge/beads/internal/storage/schema"
+	"github.com/steveyegge/beads/schema"
 )
 
 // TestSchemaMigrationsPopulatedAfterInit verifies that initSchemaOnDB populates

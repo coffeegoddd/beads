@@ -10,8 +10,8 @@ import (
 	"github.com/stretchr/testify/suite"
 
 	"github.com/steveyegge/beads/internal/storage/doltutil"
-	"github.com/steveyegge/beads/internal/storage/schema"
 	"github.com/steveyegge/beads/internal/testutil"
+	"github.com/steveyegge/beads/schema"
 )
 
 type testSuite struct {

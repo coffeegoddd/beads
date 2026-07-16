@@ -31,11 +31,11 @@ import (
 	beadsmysql "github.com/steveyegge/beads/internal/storage/mysql"
 	"github.com/steveyegge/beads/internal/storage/pgdialect"
 	"github.com/steveyegge/beads/internal/storage/postgres"
-	"github.com/steveyegge/beads/internal/storage/schema"
 	beadssqlite "github.com/steveyegge/beads/internal/storage/sqlite"
 	"github.com/steveyegge/beads/internal/templates/agents"
 	"github.com/steveyegge/beads/internal/ui"
 	"github.com/steveyegge/beads/internal/utils"
+	"github.com/steveyegge/beads/schema"
 	"golang.org/x/term"
 )
 

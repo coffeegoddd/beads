@@ -19,8 +19,8 @@ import (
 	"github.com/google/uuid"
 	"github.com/steveyegge/beads/internal/configfile"
 	"github.com/steveyegge/beads/internal/storage/embeddeddolt"
-	"github.com/steveyegge/beads/internal/storage/schema"
 	"github.com/steveyegge/beads/internal/types"
+	"github.com/steveyegge/beads/schema"
 )
 
 var (

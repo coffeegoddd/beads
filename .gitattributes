@@ -13,4 +13,4 @@ internal/templates/agents/defaults/*.md text eol=lf
 # (schema_migrations.content_hash, PR 4270). Pin LF so from-source builds on
 # Windows checkouts (core.autocrlf=true) hash identically to release builds
 # instead of reporting false migration-content skew.
-internal/storage/schema/migrations/**/*.sql text eol=lf
+schema/migrations/**/*.sql text eol=lf

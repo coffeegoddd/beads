@@ -22,5 +22,5 @@ engdocs/adr/0002-init-safety-invariants.md  @gastownhall/beads-maintainers
 # additions and hygiene-script changes with the same suspicion as the
 # migrations themselves. NOTE: GitHub only enforces CODEOWNERS when branch
 # protection has "require review from Code Owners" enabled (bd-6dnrw.23).
-internal/storage/schema/migrations/  @gastownhall/beads-maintainers
+schema/migrations/  @gastownhall/beads-maintainers
 scripts/check-migration-hygiene.sh   @gastownhall/beads-maintainers

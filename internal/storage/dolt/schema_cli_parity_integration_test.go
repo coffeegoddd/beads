@@ -11,7 +11,7 @@ import (
 	"sort"
 	"testing"
 
-	"github.com/steveyegge/beads/internal/storage/schema"
+	"github.com/steveyegge/beads/schema"
 )
 
 func TestCLIBundleMatchesRuntimeCommittedSchema(t *testing.T) {
