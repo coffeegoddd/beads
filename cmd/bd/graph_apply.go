@@ -339,21 +339,15 @@ func createIssuesFromGraph(planFile string, dryRun bool, opts GraphApplyOptions)
 		return HandleErrorRespectJSON("parsing graph plan: %v", err)
 	}
 
-	var customStatuses []string
-	if graphPlanHasStatuses(&plan) {
-		customStatuses = loadEmbeddedCustomStatuses()
+	dbPrefix, allowedPrefixes := loadEmbeddedIDPrefixes()
+	cfg := graphPlanConfig{
+		customTypes:     loadEmbeddedCustomTypes(),
+		customStatuses:  loadEmbeddedCustomStatuses(),
+		dbPrefix:        dbPrefix,
+		allowedPrefixes: allowedPrefixes,
 	}
-	if err := validateGraphApplyPlan(&plan, loadEmbeddedCustomTypes(), customStatuses); err != nil {
+	if _, err := validateFullGraphPlan(&plan, cfg, opts, false); err != nil {
 		return HandleErrorRespectJSON("invalid graph plan: %v", err)
-	}
-	if _, err := validateGraphApplyStorageClasses(&plan, opts, false); err != nil {
-		return HandleErrorRespectJSON("invalid graph plan: %v", err)
-	}
-	if graphPlanHasExplicitIDs(&plan) {
-		dbPrefix, allowedPrefixes := loadEmbeddedIDPrefixes()
-		if err := validateGraphApplyExplicitIDPrefixes(&plan, dbPrefix, allowedPrefixes, opts.Force); err != nil {
-			return HandleErrorRespectJSON("invalid graph plan: %v", err)
-		}
 	}
 
 	if dryRun {
@@ -447,6 +441,31 @@ func emitGraphApplyDryRun(plan *GraphApplyPlan, opts GraphApplyOptions) error {
 		fmt.Printf("  %s [%s] P%d %q%s\n", row.Key, row.Type, row.Priority, row.Title, extras)
 	}
 	return nil
+}
+
+// graphPlanConfig bundles the config inputs full-plan validation needs; the
+// embedded and proxied paths populate it from their respective config sources.
+type graphPlanConfig struct {
+	customTypes     []string
+	customStatuses  []string
+	dbPrefix        string
+	allowedPrefixes string
+}
+
+// validateFullGraphPlan runs every plan-level check in one place so the
+// embedded and proxied paths cannot skip a step independently: shared plan
+// checks, storage-class resolution (uniform when requireUniform), and
+// explicit-ID prefix checks. The returned useWisp is node 0's storage class —
+// under requireUniform, the routing decision for the whole plan.
+func validateFullGraphPlan(plan *GraphApplyPlan, cfg graphPlanConfig, opts GraphApplyOptions, requireUniform bool) (useWisp bool, err error) {
+	if err := validateGraphApplyPlan(plan, cfg.customTypes, cfg.customStatuses); err != nil {
+		return false, err
+	}
+	useWisp, err = validateGraphApplyStorageClasses(plan, opts, requireUniform)
+	if err != nil {
+		return false, err
+	}
+	return useWisp, validateGraphApplyExplicitIDPrefixes(plan, cfg.dbPrefix, cfg.allowedPrefixes, opts.Force)
 }
 
 func validateGraphApplyPlan(plan *GraphApplyPlan, customTypes, customStatuses []string) error {
@@ -654,29 +673,6 @@ func validateGraphApplyExplicitIDPrefixes(plan *GraphApplyPlan, dbPrefix, allowe
 	return nil
 }
 
-// graphPlanHasExplicitIDs reports whether any plan node pins an explicit
-// issue ID, so callers can skip loading prefix config for the common case.
-func graphPlanHasExplicitIDs(plan *GraphApplyPlan) bool {
-	for _, node := range plan.Nodes {
-		if node.ID != "" {
-			return true
-		}
-	}
-	return false
-}
-
-// graphPlanHasStatuses reports whether any plan node sets an initial status,
-// so callers can skip loading custom-status config for the common case
-// (statuses are only consulted for non-empty, non-builtin values).
-func graphPlanHasStatuses(plan *GraphApplyPlan) bool {
-	for _, node := range plan.Nodes {
-		if node.Status != "" {
-			return true
-		}
-	}
-	return false
-}
-
 // loadEmbeddedIDPrefixes returns the database prefix and allowed_prefixes for
 // explicit-ID validation. YAML config takes precedence over DB (via
 // overlayYAMLPrefix) — in shared-server mode the DB may belong to a different
@@ -806,13 +802,11 @@ func graphApplyNodeIssue(node GraphApplyNode, opts GraphApplyOptions, createdBy,
 		Actor:              node.Actor,
 		Target:             node.Target,
 		Payload:            node.Payload,
+		InitialStatus:      node.Status,
 		DueAt:              node.DueAt,
 		DeferUntil:         node.DeferUntil,
 		Metadata:           metadataJSON,
 	})
-	if node.Status != "" {
-		issue.Status = types.Status(node.Status)
-	}
 	// Backfill status-coupled timestamps: the proxied domain insert does no
 	// backfill, and neither path stamps started_at for issues born in_progress.
 	now := time.Now().UTC()
@@ -841,17 +835,6 @@ func graphApplyNodeStorageClass(node GraphApplyNode, opts GraphApplyOptions) (ep
 		return false, false, fmt.Errorf("node %q: ephemeral and no_history are mutually exclusive", node.Key)
 	}
 	return ephemeral, noHistory, nil
-}
-
-// graphApplyEdgeDependency builds the dependency record for an edge via the
-// shared types.NewGraphEdgeDependency (also used by the domain apply path).
-// keyToID maps plan-local node keys to their minted issue IDs.
-func graphApplyEdgeDependency(edge GraphApplyEdge, fromID, toID string, depType types.DependencyType, keyToID map[string]string) (*types.Dependency, error) {
-	dep, err := types.NewGraphEdgeDependency(fromID, toID, depType, edge.Gate, edge.SpawnerKey, edge.SpawnerID, edge.ThreadID, keyToID)
-	if err != nil {
-		return nil, fmt.Errorf("edge %s->%s: %w", fromID, toID, err)
-	}
-	return dep, nil
 }
 
 func executeGraphApply(ctx context.Context, plan *GraphApplyPlan, opts GraphApplyOptions) (*GraphApplyResult, error) {
@@ -973,9 +956,9 @@ func executeGraphApply(ctx context.Context, plan *GraphApplyPlan, opts GraphAppl
 				if parentDepPairs[graphApplyDepPairKey(toID, fromID)] && graphApplyCycleRelevantDependencyType(depType) {
 					return fmt.Errorf("edge %d %s->%s creates a blocking reverse of a parent-child relationship", i, fromID, toID)
 				}
-				dep, err := graphApplyEdgeDependency(edge, fromID, toID, depType, keyToID)
+				dep, err := types.NewGraphEdgeDependency(fromID, toID, depType, edge.Gate, edge.SpawnerKey, edge.SpawnerID, edge.ThreadID, keyToID)
 				if err != nil {
-					return err
+					return fmt.Errorf("edge %s->%s: %w", fromID, toID, err)
 				}
 				if err := tx.AddDependencyWithOptions(ctx, dep, actor, storage.DependencyAddOptions{}); err != nil {
 					return fmt.Errorf("adding edge %s->%s: %w", fromID, toID, err)
@@ -988,30 +971,17 @@ func executeGraphApply(ctx context.Context, plan *GraphApplyPlan, opts GraphAppl
 			// Add per-node inline dependencies in stable order for this phase.
 			for i, node := range plan.Nodes {
 				for _, dep := range node.Deps {
-					depType := types.DependencyType(dep.Type)
-					if depType == "" {
-						depType = types.DepBlocks
-					}
-					if (depType == types.DepParentChild) != parentPhase {
-						continue
-					}
-					targetID := keyToID[dep.Target]
-					if targetID == "" {
-						targetID = dep.Target
-					}
-					if targetID == "" {
-						return fmt.Errorf("node %q: dep target %q not found", node.Key, dep.Target)
-					}
-					// Shared builder so waits-for deps carry gate metadata like
-					// waits-for edges (all-children default, no explicit spawner).
-					d, err := types.NewGraphEdgeDependency(issues[i].ID, targetID, depType, "", "", "", "", nil)
+					d, err := types.NewGraphNodeDependency(issues[i].ID, types.DependencyType(dep.Type), dep.Target, keyToID)
 					if err != nil {
-						return fmt.Errorf("node %q: dep to %q: %w", node.Key, dep.Target, err)
+						return fmt.Errorf("node %q: %w", node.Key, err)
+					}
+					if (d.Type == types.DepParentChild) != parentPhase {
+						continue
 					}
 					if err := tx.AddDependency(ctx, d, actor); err != nil {
 						return fmt.Errorf("node %q: adding dep to %q: %w", node.Key, dep.Target, err)
 					}
-					if graphApplySchedulingDependencyType(depType) {
+					if graphApplySchedulingDependencyType(d.Type) {
 						newSchedulingEdges = append(newSchedulingEdges, [2]string{d.IssueID, d.DependsOnID})
 					}
 				}

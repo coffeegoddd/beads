@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"hash"
 	"regexp"
+	"slices"
 	"strings"
 	"time"
 )
@@ -664,19 +665,21 @@ const (
 	MolTypeWork   MolType = "work"   // Work molecule: regular assigned work (default)
 )
 
+// validMolTypes is the canonical value list; IsValid and ValidMolTypeNames
+// both derive from it so the two cannot drift.
+var validMolTypes = []MolType{MolTypeSwarm, MolTypePatrol, MolTypeWork}
+
 // IsValid checks if the mol type value is valid
 func (m MolType) IsValid() bool {
-	switch m {
-	case MolTypeSwarm, MolTypePatrol, MolTypeWork, "":
+	if m == "" {
 		return true // empty is valid (defaults to work)
 	}
-	return false
+	return slices.Contains(validMolTypes, m)
 }
 
-// ValidMolTypeNames enumerates the accepted mol-type values for error
-// messages, kept next to MolType.IsValid so the two cannot drift.
+// ValidMolTypeNames enumerates the accepted mol-type values for error messages.
 func ValidMolTypeNames() string {
-	return joinNamesWithOr(string(MolTypeSwarm), string(MolTypePatrol), string(MolTypeWork))
+	return joinNamesWithOr(validMolTypes...)
 }
 
 // WispType categorizes ephemeral wisps for TTL-based compaction (gt-9br)
@@ -698,29 +701,36 @@ const (
 	WispTypeEscalation WispType = "escalation" // Human escalations
 )
 
-// IsValid checks if the wisp type value is valid
-func (w WispType) IsValid() bool {
-	switch w {
-	case WispTypeHeartbeat, WispTypePing, WispTypePatrol, WispTypeGCReport,
-		WispTypeRecovery, WispTypeError, WispTypeEscalation, "":
-		return true // empty is valid (uses default TTL)
-	}
-	return false
+// validWispTypes is the canonical value list; IsValid and ValidWispTypeNames
+// both derive from it so the two cannot drift.
+var validWispTypes = []WispType{
+	WispTypeHeartbeat, WispTypePing, WispTypePatrol, WispTypeGCReport,
+	WispTypeRecovery, WispTypeError, WispTypeEscalation,
 }
 
-// ValidWispTypeNames enumerates the accepted wisp-type values for error
-// messages, kept next to WispType.IsValid so the two cannot drift.
+// IsValid checks if the wisp type value is valid
+func (w WispType) IsValid() bool {
+	if w == "" {
+		return true // empty is valid (uses default TTL)
+	}
+	return slices.Contains(validWispTypes, w)
+}
+
+// ValidWispTypeNames enumerates the accepted wisp-type values for error messages.
 func ValidWispTypeNames() string {
-	return joinNamesWithOr(string(WispTypeHeartbeat), string(WispTypePing), string(WispTypePatrol),
-		string(WispTypeGCReport), string(WispTypeRecovery), string(WispTypeError), string(WispTypeEscalation))
+	return joinNamesWithOr(validWispTypes...)
 }
 
 // joinNamesWithOr formats a value list as "a, b, or c" for error messages.
-func joinNamesWithOr(names ...string) string {
-	if len(names) == 1 {
-		return names[0]
+func joinNamesWithOr[T ~string](names ...T) string {
+	strs := make([]string, len(names))
+	for i, n := range names {
+		strs[i] = string(n)
 	}
-	return strings.Join(names[:len(names)-1], ", ") + ", or " + names[len(names)-1]
+	if len(strs) == 1 {
+		return strs[0]
+	}
+	return strings.Join(strs[:len(strs)-1], ", ") + ", or " + strs[len(strs)-1]
 }
 
 // WorkType categorizes how work assignment operates for a bead (Decision 006)
@@ -953,6 +963,35 @@ func NewGraphEdgeDependency(fromID, toID string, depType DependencyType, gate, s
 		dep.Metadata = meta
 	}
 	return dep, nil
+}
+
+// NewWaitsForDependency builds the waits-for dependency record for a single
+// issue outside a graph plan: the spawner is the depends_on target and the
+// metadata carries the gate (defaulted to all-children). Shares
+// NewGraphEdgeDependency so single-issue and graph-created waits-for rows
+// cannot drift.
+func NewWaitsForDependency(issueID, spawnerID, gate string) (*Dependency, error) {
+	return NewGraphEdgeDependency(issueID, spawnerID, DepWaitsFor, gate, "", "", "", nil)
+}
+
+// NewGraphNodeDependency builds the dependency record for a graph-plan node's
+// inline dep, shared by the embedded and domain apply paths so their
+// resolution semantics cannot drift: an empty type defaults to blocks, and
+// the target resolves as a plan-local key first, then as a literal issue ID.
+// Waits-for deps carry gate metadata like waits-for edges (all-children
+// default, no explicit spawner).
+func NewGraphNodeDependency(issueID string, depType DependencyType, target string, keyToID map[string]string) (*Dependency, error) {
+	if depType == "" {
+		depType = DepBlocks
+	}
+	targetID := keyToID[target]
+	if targetID == "" {
+		targetID = target
+	}
+	if targetID == "" {
+		return nil, fmt.Errorf("dep target %q not found", target)
+	}
+	return NewGraphEdgeDependency(issueID, targetID, depType, "", "", "", "", nil)
 }
 
 // MergeMetadataRefs merges resolved metadata_refs into an issue's existing

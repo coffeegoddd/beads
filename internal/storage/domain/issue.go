@@ -722,15 +722,9 @@ func (u *issueUseCaseImpl) create(ctx context.Context, params CreateIssueParams,
 
 	if params.WaitsFor != nil {
 		// Spawner identity is the depends_on_id; metadata carries the gate.
-		metaJSON, err := types.BuildWaitsForMeta(params.WaitsFor.Gate, "")
+		dep, err := types.NewWaitsForDependency(issue.ID, params.WaitsFor.SpawnerID, params.WaitsFor.Gate)
 		if err != nil {
 			return result, fmt.Errorf("create: marshal waits-for meta: %w", err)
-		}
-		dep := &types.Dependency{
-			IssueID:     issue.ID,
-			DependsOnID: params.WaitsFor.SpawnerID,
-			Type:        types.DepWaitsFor,
-			Metadata:    metaJSON,
 		}
 		if err := u.depRepo.Insert(ctx, dep, actor, DepInsertOpts{UseWispsTable: useWisp}); err != nil {
 			return result, fmt.Errorf("create: add waits-for: %w", err)
@@ -931,32 +925,21 @@ func (u *issueUseCaseImpl) applyGraph(ctx context.Context, plan GraphPlan, actor
 			}
 		}
 
-		// Per-node inline deps in stable order for this phase, mirroring the
-		// embedded executeGraphApply (cmd/bd/graph_apply.go).
+		// Per-node inline deps in stable order for this phase, resolved by the
+		// same shared builder as the embedded executeGraphApply (cmd/bd/graph_apply.go).
 		for _, node := range plan.Nodes {
 			for _, nd := range node.Deps {
-				depType := nd.Type
-				if depType == "" {
-					depType = types.DepBlocks
-				}
-				if (depType == types.DepParentChild) != parentPhase {
-					continue
-				}
-				targetID := keyToID[nd.Target]
-				if targetID == "" {
-					targetID = nd.Target
-				}
-				if targetID == "" {
-					return GraphApplyResult{}, fmt.Errorf("applyGraph: node %q: dep target %q not found", node.Key, nd.Target)
-				}
-				dep, err := types.NewGraphEdgeDependency(keyToID[node.Key], targetID, depType, "", "", "", "", nil)
+				dep, err := types.NewGraphNodeDependency(keyToID[node.Key], nd.Type, nd.Target, keyToID)
 				if err != nil {
-					return GraphApplyResult{}, fmt.Errorf("applyGraph: node %q: dep to %q: %w", node.Key, nd.Target, err)
+					return GraphApplyResult{}, fmt.Errorf("applyGraph: node %q: %w", node.Key, err)
+				}
+				if (dep.Type == types.DepParentChild) != parentPhase {
+					continue
 				}
 				if err := u.depRepo.Insert(ctx, dep, actor, DepInsertOpts{UseWispsTable: useWisp}); err != nil {
 					return GraphApplyResult{}, fmt.Errorf("applyGraph: node %q: adding dep to %q: %w", node.Key, nd.Target, err)
 				}
-				if isSchedulingDep(depType) {
+				if isSchedulingDep(dep.Type) {
 					newSchedulingEdges = append(newSchedulingEdges, [2]string{dep.IssueID, dep.DependsOnID})
 				}
 			}

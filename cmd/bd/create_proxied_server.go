@@ -120,11 +120,7 @@ func runCreateProxiedSingle(_ *cobra.Command, ctx context.Context, in createInpu
 			}
 		}
 		if in.status != "" {
-			customStatuses, err := uw.ConfigUseCase().GetCustomStatuses(ctx)
-			if err != nil {
-				return nil, "", fmt.Errorf("failed to get custom statuses: %w", err)
-			}
-			if !types.Status(in.status).IsValidWithCustom(types.CustomStatusNames(customStatuses)) {
+			if !types.Status(in.status).IsValidWithCustom(types.CustomStatusNames(cctx.CustomStatuses)) {
 				return nil, "", fmt.Errorf("invalid status %q (built-in: open, in_progress, blocked, deferred, closed, pinned, hooked; or configure custom statuses via 'bd config set status.custom')", in.status)
 			}
 		}
@@ -477,19 +473,13 @@ func runCreateProxiedGraph(_ *cobra.Command, ctx context.Context, in createInput
 // one table), and explicit-ID prefix checks against the server's config. The
 // returned useWisp is the plan-wide table routing decision.
 func validateProxiedGraphPlan(plan *GraphApplyPlan, in createInput, cctx domain.CreateContext) (useWisp bool, err error) {
-	var customStatuses []string
-	if graphPlanHasStatuses(plan) {
-		customStatuses = resolveProxiedCustomStatuses(cctx.CustomStatuses)
+	cfg := graphPlanConfig{
+		customTypes:     resolveProxiedCustomTypes(cctx.CustomTypes),
+		customStatuses:  resolveProxiedCustomStatuses(cctx.CustomStatuses),
+		dbPrefix:        overlayYAMLPrefix(cctx.IssuePrefix),
+		allowedPrefixes: cctx.AllowedPrefixes,
 	}
-	if err := validateGraphApplyPlan(plan, resolveProxiedCustomTypes(cctx.CustomTypes), customStatuses); err != nil {
-		return false, err
-	}
-	opts := in.graphApplyOptions()
-	useWisp, err = validateGraphApplyStorageClasses(plan, opts, true)
-	if err != nil {
-		return false, err
-	}
-	return useWisp, validateGraphApplyExplicitIDPrefixes(plan, overlayYAMLPrefix(cctx.IssuePrefix), cctx.AllowedPrefixes, opts.Force)
+	return validateFullGraphPlan(plan, cfg, in.graphApplyOptions(), true)
 }
 
 // graphApplyNodeIssue path (full issue-model parity with `bd create`).

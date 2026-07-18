@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"encoding/json"
 	"os"
-	"path/filepath"
 	"reflect"
 	"sort"
 	"strings"
@@ -13,27 +12,19 @@ import (
 	"github.com/steveyegge/beads/internal/types"
 )
 
-// TestDocsGraphPlanExampleValidates pins the CLI_REFERENCE.md --graph example
+// TestDocsGraphPlanExampleValidates pins the --graph doc supplement's example
 // to the validator: the canonical example must stay a plan `bd create --graph`
 // actually accepts (review caught it shipping with event fields on a task
-// node and edges duplicating parent_key).
+// node and edges duplicating parent_key). The embedded supplement is the
+// source of truth; the docs drift gate keeps the generated CLI reference
+// byte-equal to it.
 func TestDocsGraphPlanExampleValidates(t *testing.T) {
-	data, err := os.ReadFile(filepath.Join("..", "..", "docs", "CLI_REFERENCE.md"))
-	if err != nil {
-		t.Fatalf("read CLI_REFERENCE.md: %v", err)
-	}
-	marker := "Graph plan schema (`--graph`)"
-	idx := strings.Index(string(data), marker)
-	if idx < 0 {
-		t.Fatal("graph plan schema section not found in CLI_REFERENCE.md")
-	}
-	rest := string(data)[idx:]
 	const fence = "```json\n"
-	start := strings.Index(rest, fence)
+	start := strings.Index(createGraphPlanSupplement, fence)
 	if start < 0 {
-		t.Fatal("example JSON block not found after graph plan schema heading")
+		t.Fatal("example JSON block not found in create_graph_plan.md supplement")
 	}
-	rest = rest[start+len(fence):]
+	rest := createGraphPlanSupplement[start+len(fence):]
 	end := strings.Index(rest, "```")
 	if end < 0 {
 		t.Fatal("example JSON block not terminated")
@@ -782,10 +773,9 @@ func TestGraphApplyEdgeDependencyGateMetadata(t *testing.T) {
 	resolve := map[string]string{"spawner": "bd-spawn1"}
 
 	t.Run("gate and spawner_key resolve into waits-for metadata", func(t *testing.T) {
-		edge := GraphApplyEdge{Type: "waits-for", Gate: "any-children", SpawnerKey: "spawner"}
-		dep, err := graphApplyEdgeDependency(edge, "bd-from", "bd-to", "waits-for", resolve)
+		dep, err := types.NewGraphEdgeDependency("bd-from", "bd-to", types.DepWaitsFor, "any-children", "spawner", "", "", resolve)
 		if err != nil {
-			t.Fatalf("graphApplyEdgeDependency: %v", err)
+			t.Fatalf("NewGraphEdgeDependency: %v", err)
 		}
 		var meta types.WaitsForMeta
 		if err := json.Unmarshal([]byte(dep.Metadata), &meta); err != nil {
@@ -797,10 +787,9 @@ func TestGraphApplyEdgeDependencyGateMetadata(t *testing.T) {
 	})
 
 	t.Run("gate defaults to all-children when spawner is set", func(t *testing.T) {
-		edge := GraphApplyEdge{Type: "waits-for", SpawnerID: "bd-ext1"}
-		dep, err := graphApplyEdgeDependency(edge, "bd-from", "bd-to", "waits-for", resolve)
+		dep, err := types.NewGraphEdgeDependency("bd-from", "bd-to", types.DepWaitsFor, "", "", "bd-ext1", "", resolve)
 		if err != nil {
-			t.Fatalf("graphApplyEdgeDependency: %v", err)
+			t.Fatalf("NewGraphEdgeDependency: %v", err)
 		}
 		var meta types.WaitsForMeta
 		if err := json.Unmarshal([]byte(dep.Metadata), &meta); err != nil {
@@ -812,10 +801,9 @@ func TestGraphApplyEdgeDependencyGateMetadata(t *testing.T) {
 	})
 
 	t.Run("plain edge carries no metadata and passes thread_id", func(t *testing.T) {
-		edge := GraphApplyEdge{Type: "replies-to", ThreadID: "thread-9"}
-		dep, err := graphApplyEdgeDependency(edge, "bd-from", "bd-to", "replies-to", resolve)
+		dep, err := types.NewGraphEdgeDependency("bd-from", "bd-to", types.DepRepliesTo, "", "", "", "thread-9", resolve)
 		if err != nil {
-			t.Fatalf("graphApplyEdgeDependency: %v", err)
+			t.Fatalf("NewGraphEdgeDependency: %v", err)
 		}
 		if dep.Metadata != "" {
 			t.Errorf("Metadata = %q, want empty for ungated edge", dep.Metadata)
@@ -829,10 +817,9 @@ func TestGraphApplyEdgeDependencyGateMetadata(t *testing.T) {
 		// '{}' metadata must never be stored for waits-for deps: the gate SQL
 		// reads $.gate and NULL poisons its NOT(... AND ...) predicate,
 		// unblocking the gate as soon as the first child closes.
-		edge := GraphApplyEdge{Type: "waits-for"}
-		dep, err := graphApplyEdgeDependency(edge, "bd-from", "bd-to", "waits-for", resolve)
+		dep, err := types.NewGraphEdgeDependency("bd-from", "bd-to", types.DepWaitsFor, "", "", "", "", resolve)
 		if err != nil {
-			t.Fatalf("graphApplyEdgeDependency: %v", err)
+			t.Fatalf("NewGraphEdgeDependency: %v", err)
 		}
 		var meta types.WaitsForMeta
 		if err := json.Unmarshal([]byte(dep.Metadata), &meta); err != nil {
@@ -844,8 +831,7 @@ func TestGraphApplyEdgeDependencyGateMetadata(t *testing.T) {
 	})
 
 	t.Run("unresolved spawner_key errors instead of writing empty spawner", func(t *testing.T) {
-		edge := GraphApplyEdge{Type: "waits-for", SpawnerKey: "ghost"}
-		if _, err := graphApplyEdgeDependency(edge, "bd-from", "bd-to", "waits-for", resolve); err == nil {
+		if _, err := types.NewGraphEdgeDependency("bd-from", "bd-to", types.DepWaitsFor, "", "ghost", "", "", resolve); err == nil {
 			t.Fatal("expected error for unresolved spawner key")
 		}
 	})
