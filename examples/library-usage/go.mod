@@ -1,6 +1,6 @@
 module example.com/beads-library-demo
 
-go 1.26.2
+go 1.26.5
 
 require github.com/steveyegge/beads v0.0.0
 
