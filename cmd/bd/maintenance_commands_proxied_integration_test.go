@@ -3,10 +3,24 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
 	"testing"
 )
+
+func parseProxiedJSONObject(t *testing.T, stdout string) map[string]interface{} {
+	t.Helper()
+	start := strings.Index(stdout, "{")
+	if start < 0 {
+		t.Fatalf("no JSON object found in output:\n%s", stdout)
+	}
+	var m map[string]interface{}
+	if err := json.Unmarshal([]byte(stdout[start:]), &m); err != nil {
+		t.Fatalf("failed to parse JSON object: %v\nraw: %s", err, stdout[start:])
+	}
+	return m
+}
 
 func TestProxiedServerPing(t *testing.T) {
 	requireSharedProxiedServer(t)
@@ -90,6 +104,52 @@ func TestProxiedServerGC(t *testing.T) {
 			t.Errorf("expected --force hint in refusal, got:\n%s\n%s", stdout, stderr)
 		}
 	})
+
+	t.Run("skip_decay", func(t *testing.T) {
+		stdout, stderr, err := bdProxiedRunBuffers(t, bd, p.dir, "gc", "--dry-run", "--skip-decay")
+		if err != nil {
+			t.Fatalf("bd gc --skip-decay failed: %v\nstdout:\n%s\nstderr:\n%s", err, stdout, stderr)
+		}
+		if !strings.Contains(stdout, "Decay: skipped") {
+			t.Errorf("expected 'Decay: skipped', got: %s", stdout)
+		}
+	})
+
+	t.Run("skip_dolt", func(t *testing.T) {
+		stdout, stderr, err := bdProxiedRunBuffers(t, bd, p.dir, "gc", "--dry-run", "--skip-dolt")
+		if err != nil {
+			t.Fatalf("bd gc --skip-dolt failed: %v\nstdout:\n%s\nstderr:\n%s", err, stdout, stderr)
+		}
+		if !strings.Contains(stdout, "Dolt GC: skipped") {
+			t.Errorf("expected 'Dolt GC: skipped', got: %s", stdout)
+		}
+	})
+
+	t.Run("json_summary", func(t *testing.T) {
+		stdout, stderr, err := bdProxiedRunBuffers(t, bd, p.dir, "gc", "--dry-run", "--json")
+		if err != nil {
+			t.Fatalf("bd gc --json failed: %v\nstdout:\n%s\nstderr:\n%s", err, stdout, stderr)
+		}
+		m := parseProxiedJSONObject(t, stdout)
+		if m["dry_run"] != true {
+			t.Errorf("expected dry_run=true, got: %v", m["dry_run"])
+		}
+		phases, ok := m["phases"].([]interface{})
+		if !ok || len(phases) != 3 {
+			t.Fatalf("expected 3 phases in JSON, got: %v", m["phases"])
+		}
+		names := map[string]bool{}
+		for _, ph := range phases {
+			if pm, ok := ph.(map[string]interface{}); ok {
+				names[fmt.Sprintf("%v", pm["name"])] = true
+			}
+		}
+		for _, want := range []string{"Decay", "Compact", "Dolt GC"} {
+			if !names[want] {
+				t.Errorf("expected phase %q in JSON, got: %v", want, names)
+			}
+		}
+	})
 }
 
 func TestProxiedServerCompactDolt(t *testing.T) {
@@ -144,6 +204,20 @@ func TestProxiedServerCompactHistory(t *testing.T) {
 		}
 	})
 
+	t.Run("json_dry_run", func(t *testing.T) {
+		stdout, stderr, err := bdProxiedRunBuffers(t, bd, p.dir, "compact", "--days", "0", "--dry-run", "--json")
+		if err != nil {
+			t.Fatalf("compact --dry-run --json failed: %v\nstdout:\n%s\nstderr:\n%s", err, stdout, stderr)
+		}
+		m := parseProxiedJSONObject(t, stdout)
+		if m["dry_run"] != true {
+			t.Errorf("expected dry_run=true, got: %v", m["dry_run"])
+		}
+		if _, ok := m["total_commits"]; !ok {
+			t.Errorf("expected total_commits field, got: %v", m)
+		}
+	})
+
 	t.Run("refuses_without_force", func(t *testing.T) {
 		stdout, stderr, err := bdProxiedRunBuffers(t, bd, p.dir, "compact", "--days", "0")
 		if err == nil {
@@ -178,6 +252,16 @@ func TestProxiedServerCompactHistory(t *testing.T) {
 			}
 		}
 	})
+
+	t.Run("nothing_to_compact_when_all_recent", func(t *testing.T) {
+		stdout, stderr, err := bdProxiedRunBuffers(t, bd, p.dir, "compact", "--days", "3650", "--force")
+		if err != nil {
+			t.Fatalf("compact --days 3650 failed: %v\nstdout:\n%s\nstderr:\n%s", err, stdout, stderr)
+		}
+		if !strings.Contains(stdout, "Nothing to compact") {
+			t.Errorf("expected 'Nothing to compact', got: %s", stdout)
+		}
+	})
 }
 
 func proxiedCommitCount(t *testing.T, bd string, p proxiedProject) int {
@@ -205,8 +289,20 @@ func TestProxiedServerCleanDatabases(t *testing.T) {
 	bd := buildEmbeddedBD(t)
 	p := newSharedProxiedProject(t, bd, "clean")
 
-	staleDB := fmt.Sprintf("testdb_clean_probe_%s", strings.ReplaceAll(p.database, "bdtest_", ""))
+	suffix := strings.ReplaceAll(p.database, "bdtest_", "")
+	staleDB := fmt.Sprintf("testdb_clean_probe_%s", suffix)
+	keepDB := fmt.Sprintf("keepdb_clean_probe_%s", suffix)
 	bdProxiedSQL(t, bd, p.dir, "CREATE DATABASE "+staleDB)
+	bdProxiedSQL(t, bd, p.dir, "CREATE DATABASE "+keepDB)
+	t.Cleanup(func() {
+		_, _, _ = bdProxiedRunBuffers(t, bd, p.dir, "sql", "DROP DATABASE IF EXISTS `"+keepDB+"`")
+	})
+
+	databaseExists := func(name string) bool {
+		rows := bdProxiedSQLJSON(t, bd, p.dir,
+			"SELECT COUNT(*) as count FROM information_schema.schemata WHERE schema_name = '"+name+"'")
+		return len(rows) == 1 && sqlValueEquals(rows[0]["count"], 1)
+	}
 
 	t.Run("dry_run_lists_without_dropping", func(t *testing.T) {
 		stdout, stderr, err := bdProxiedRunBuffers(t, bd, p.dir, "dolt", "clean-databases", "--dry-run")
@@ -216,9 +312,15 @@ func TestProxiedServerCleanDatabases(t *testing.T) {
 		if !strings.Contains(stdout, staleDB) || !strings.Contains(stdout, "dry run") {
 			t.Errorf("expected dry-run to list %s, got: %s", staleDB, stdout)
 		}
+		if strings.Contains(stdout, keepDB) {
+			t.Errorf("dry-run should not list non-stale %s, got: %s", keepDB, stdout)
+		}
+		if !databaseExists(staleDB) {
+			t.Errorf("dry-run must not drop %s", staleDB)
+		}
 	})
 
-	t.Run("drops_stale_database", func(t *testing.T) {
+	t.Run("drops_stale_leaves_non_stale", func(t *testing.T) {
 		stdout, stderr, err := bdProxiedRunBuffers(t, bd, p.dir, "dolt", "clean-databases")
 		if err != nil {
 			t.Fatalf("clean-databases failed: %v\nstdout:\n%s\nstderr:\n%s", err, stdout, stderr)
@@ -226,11 +328,27 @@ func TestProxiedServerCleanDatabases(t *testing.T) {
 		if !strings.Contains(stdout, "Dropped: "+staleDB) {
 			t.Errorf("expected %s dropped, got: %s", staleDB, stdout)
 		}
+		if strings.Contains(stdout, keepDB) {
+			t.Errorf("clean-databases must not touch non-stale %s, got: %s", keepDB, stdout)
+		}
+		if databaseExists(staleDB) {
+			t.Errorf("expected %s gone", staleDB)
+		}
+		if !databaseExists(keepDB) {
+			t.Errorf("expected non-stale %s to survive", keepDB)
+		}
+	})
 
-		rows := bdProxiedSQLJSON(t, bd, p.dir,
-			"SELECT COUNT(*) as count FROM information_schema.schemata WHERE schema_name = '"+staleDB+"'")
-		if len(rows) != 1 || !sqlValueEquals(rows[0]["count"], 0) {
-			t.Errorf("expected %s gone, got: %v", staleDB, rows)
+	t.Run("empty_case_reports_none", func(t *testing.T) {
+		stdout, stderr, err := bdProxiedRunBuffers(t, bd, p.dir, "dolt", "clean-databases")
+		if err != nil {
+			t.Fatalf("clean-databases (empty) failed: %v\nstdout:\n%s\nstderr:\n%s", err, stdout, stderr)
+		}
+		if !strings.Contains(stdout, "No stale databases found") {
+			t.Errorf("expected 'No stale databases found', got: %s", stdout)
+		}
+		if !databaseExists(keepDB) {
+			t.Errorf("expected non-stale %s to survive empty run", keepDB)
 		}
 	})
 }
