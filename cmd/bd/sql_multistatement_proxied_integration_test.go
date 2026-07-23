@@ -68,3 +68,59 @@ func TestProxiedServerMultiStatementSQL(t *testing.T) {
 		t.Fatalf("multi-statement --json should not include rows_affected: %q", s)
 	}
 }
+
+func TestProxiedServerSQLDatabaseFlag(t *testing.T) {
+	requireProxiedServerEnv(t)
+
+	bd := buildEmbeddedBD(t)
+	p := bdProxiedInit(t, bd, "df")
+
+	// Stand up a second database with a table, alongside the project database.
+	db := openProxiedDB(t, p)
+	for _, q := range []string{
+		"CREATE DATABASE IF NOT EXISTS df_other",
+		"USE df_other; CREATE TABLE widgets (id INT PRIMARY KEY, name VARCHAR(32))",
+	} {
+		if _, err := db.ExecContext(context.Background(), q); err != nil {
+			t.Fatalf("setup %q: %v", q, err)
+		}
+	}
+
+	// A single write routed to the other database with --database.
+	out, err := bdProxiedRun(t, bd, p.dir, "sql", "--database", "df_other",
+		"INSERT INTO widgets VALUES (1, 'gear')")
+	if err != nil {
+		t.Fatalf("bd sql --database write failed: %v\n%s", err, out)
+	}
+	if got := strings.TrimSpace(string(out)); got != "OK, 1 rows affected" {
+		t.Fatalf("--database write output = %q, want %q", got, "OK, 1 rows affected")
+	}
+
+	// The write must have committed in df_other, not the project database.
+	var n int
+	if err := db.QueryRowContext(context.Background(),
+		"SELECT COUNT(*) FROM df_other.widgets WHERE name = 'gear'").Scan(&n); err != nil {
+		t.Fatalf("count df_other.widgets: %v", err)
+	}
+	if n != 1 {
+		t.Fatalf("df_other.widgets rows = %d, want 1 (--database write not committed there)", n)
+	}
+
+	// A read routed with --database against an unqualified table name resolves
+	// in the switched database and renders results.
+	out, err = bdProxiedRun(t, bd, p.dir, "sql", "--database", "df_other",
+		"SELECT name FROM widgets WHERE id = 1")
+	if err != nil {
+		t.Fatalf("bd sql --database read failed: %v\n%s", err, out)
+	}
+	if s := string(out); !strings.Contains(s, "gear") {
+		t.Fatalf("--database read output missing 'gear':\n%s", s)
+	}
+
+	// An invalid database identifier is rejected, not interpolated.
+	out, err = bdProxiedRun(t, bd, p.dir, "sql", "--database", "bad;name",
+		"SELECT 1")
+	if err == nil {
+		t.Fatalf("expected --database with invalid identifier to fail; got:\n%s", out)
+	}
+}
