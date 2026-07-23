@@ -103,7 +103,7 @@ func topLevelStatementCount(query string) int {
 			hasContent = true
 		case '-':
 			if i+1 < n && query[i+1] == '-' && (i+2 >= n || query[i+2] == ' ' || query[i+2] == '\t' || query[i+2] == '\n' || query[i+2] == '\r') {
-				for i < n && query[i] != '\n' {
+				for i < n && query[i] != '\n' && query[i] != '\r' {
 					i++
 				}
 			} else {
@@ -111,7 +111,7 @@ func topLevelStatementCount(query string) int {
 				i++
 			}
 		case '#':
-			for i < n && query[i] != '\n' {
+			for i < n && query[i] != '\n' && query[i] != '\r' {
 				i++
 			}
 		case '/':
