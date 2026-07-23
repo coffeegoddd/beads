@@ -37,7 +37,7 @@ func runDoltCleanDatabasesProxied(ctx context.Context, beadsDir string, dryRun b
 		for rows.Next() {
 			var dbName string
 			if err := rows.Scan(&dbName); err != nil {
-				continue
+				return HandleError("scanning database name: %v", err)
 			}
 			for _, prefix := range staleDatabasePrefixes {
 				if strings.HasPrefix(dbName, prefix) {

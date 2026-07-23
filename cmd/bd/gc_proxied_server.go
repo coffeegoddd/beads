@@ -40,6 +40,7 @@ func runGCProxiedServer(ctx context.Context) error {
 		detail  string
 	}
 	var results []phaseResult
+	var gcFailed bool
 
 	if gcSkipDecay {
 		results = append(results, phaseResult{name: "Decay", skipped: true})
@@ -170,6 +171,7 @@ func runGCProxiedServer(ctx context.Context) error {
 			if err != nil {
 				WarnError("dolt gc failed: %v", err)
 				results = append(results, phaseResult{name: "Dolt GC", detail: "failed"})
+				gcFailed = true
 			} else {
 				if !jsonOutput {
 					fmt.Println("  Done (complete)")
@@ -187,6 +189,7 @@ func runGCProxiedServer(ctx context.Context) error {
 	if jsonOutput {
 		summaryMap := make(map[string]interface{})
 		summaryMap["dry_run"] = gcDryRun
+		summaryMap["success"] = !gcFailed
 		summaryMap["elapsed_ms"] = elapsed.Milliseconds()
 		phases := make([]map[string]interface{}, 0, len(results))
 		for _, r := range results {
@@ -200,12 +203,21 @@ func runGCProxiedServer(ctx context.Context) error {
 			phases = append(phases, p)
 		}
 		summaryMap["phases"] = phases
-		return outputJSON(summaryMap)
+		if err := outputJSON(summaryMap); err != nil {
+			return err
+		}
+		if gcFailed {
+			return SilentExit()
+		}
+		return nil
 	}
 
 	mode := "✓ GC complete"
-	if gcDryRun {
+	switch {
+	case gcDryRun:
 		mode = "DRY RUN complete"
+	case gcFailed:
+		mode = "⚠ GC completed with errors"
 	}
 	fmt.Printf("%s (%v)\n", mode, elapsed.Round(time.Millisecond))
 	for _, r := range results {
@@ -214,6 +226,9 @@ func runGCProxiedServer(ctx context.Context) error {
 		} else {
 			fmt.Printf("  %s: %s\n", r.name, r.detail)
 		}
+	}
+	if gcFailed {
+		return SilentExit()
 	}
 	return nil
 }
@@ -227,6 +242,13 @@ func scalarCount(res *domain.RawSQLResult) int {
 		return int(v)
 	case int:
 		return v
+	case uint64:
+		return int(v)
+	case float64:
+		return int(v)
+	case []byte:
+		n, _ := strconv.Atoi(string(v))
+		return n
 	case string:
 		n, _ := strconv.Atoi(v)
 		return n

@@ -275,7 +275,9 @@ func proxiedCommitCount(t *testing.T, bd string, p proxiedProject) int {
 		return int(v)
 	case string:
 		n := 0
-		fmt.Sscanf(v, "%d", &n)
+		if _, err := fmt.Sscanf(v, "%d", &n); err != nil {
+			t.Fatalf("failed to parse commit count %q: %v", v, err)
+		}
 		return n
 	default:
 		t.Fatalf("unexpected count type %T: %v", v, v)
