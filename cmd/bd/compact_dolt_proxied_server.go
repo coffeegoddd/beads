@@ -4,7 +4,6 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
-	"os"
 	"time"
 
 	"github.com/steveyegge/beads/internal/storage/versioncontrolops"
@@ -12,6 +11,10 @@ import (
 
 func runCompactDoltProxiedServer(ctx context.Context) error {
 	start := time.Now()
+
+	if !compactDryRun {
+		CheckReadonly("compact")
+	}
 
 	if compactDryRun {
 		if jsonOutput {
@@ -32,8 +35,7 @@ func runCompactDoltProxiedServer(ctx context.Context) error {
 		return versioncontrolops.DoltGC(ctx, conn)
 	})
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error: dolt gc failed: %v\n", err)
-		return SilentExit()
+		return HandleErrorRespectJSON("dolt gc failed: %v", err)
 	}
 
 	elapsed := time.Since(start)

@@ -165,8 +165,8 @@ func runCompactProxiedServer(ctx context.Context) error {
 			"commits_after":      resultCommits,
 			"old_squashed":       oldCommits,
 			"recent_kept":        recentCommits,
-			"remote_refs_pruned": len(pruned),
-			"tags_anchoring":     len(tags),
+			"remote_refs_pruned": pruned,
+			"tags_anchoring":     tags,
 			"elapsed_ms":         elapsed.Milliseconds(),
 		})
 	}
