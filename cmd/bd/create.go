@@ -469,7 +469,8 @@ var createCmd = &cobra.Command{
 			}
 
 			// Validate prefix matches database prefix (YAML config takes
-			// precedence over DB — see loadEmbeddedIDPrefixes).
+			// precedence over DB, except under --global — see
+			// loadEmbeddedIDPrefixes).
 			dbPrefix, allowedPrefixes := loadEmbeddedIDPrefixes()
 
 			if err := validation.ValidateIDPrefixAllowed(explicitID, dbPrefix, allowedPrefixes, forceCreate); err != nil {
@@ -679,6 +680,16 @@ func mergeCreateLabels(labels, inheritedLabels []string) []string {
 		return nil
 	}
 	return merged
+}
+
+func selectCreateIDPrefix(global bool, yamlPrefix, storePrefix string) string {
+	if global {
+		return storePrefix
+	}
+	if yamlPrefix != "" {
+		return yamlPrefix
+	}
+	return storePrefix
 }
 
 func renderCreateDryRunPreview(issue *types.Issue, labels, deps []string) {

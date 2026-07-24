@@ -671,15 +671,17 @@ func validateGraphApplyExplicitIDPrefixes(plan *GraphApplyPlan, dbPrefix, allowe
 // loadEmbeddedIDPrefixes returns the database prefix and allowed_prefixes for
 // explicit-ID validation. YAML config takes precedence over DB (via
 // overlayYAMLPrefix) — in shared-server mode the DB may belong to a different
-// project (GH#2469).
+// project (GH#2469) — except under --global, where the shared database's own
+// stored prefix wins (GH#4957).
 func loadEmbeddedIDPrefixes() (dbPrefix, allowedPrefixes string) {
-	dbPrefix = overlayYAMLPrefix("")
+	var storePrefix string
 	if store != nil {
-		if dbPrefix == "" {
-			dbPrefix, _ = store.GetConfig(rootCtx, "issue_prefix") // Best effort: empty prefix is a valid fallback
-		}
+		storePrefix, _ = store.GetConfig(rootCtx, "issue_prefix")         // Best effort: empty prefix is a valid fallback
 		allowedPrefixes, _ = store.GetConfig(rootCtx, "allowed_prefixes") // Best effort: empty means no prefix restriction
 	}
+	// Under --global the shared database's stored prefix wins over the
+	// project YAML overlay (GH#4957); selectCreateIDPrefix owns that rule.
+	dbPrefix = selectCreateIDPrefix(globalFlag, overlayYAMLPrefix(""), storePrefix)
 	return dbPrefix, allowedPrefixes
 }
 
