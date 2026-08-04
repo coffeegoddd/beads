@@ -856,6 +856,8 @@ var rootCmd = &cobra.Command{
 		_ = cmd.Help() // Help() always returns nil for cobra commands
 	},
 	PersistentPreRunE: func(cmd *cobra.Command, args []string) (retErr error) {
+		latMark("prerun:enter")
+
 		applyNoColorFlag()
 
 		// Initialize CommandContext to hold runtime state (replaces scattered globals)
@@ -904,6 +906,8 @@ var rootCmd = &cobra.Command{
 		if _, err := metrics.Init(Version, resolveMetricsEnabled(), resolveMetricsEndpoint()); err != nil {
 			debug.Logf("warning: metrics init failed: %v", err)
 		}
+
+		latMark("prerun:telemetry+metrics")
 
 		if cmd.Name() == metrics.SendMetricsSubcommand {
 			return nil
@@ -1270,9 +1274,13 @@ var rootCmd = &cobra.Command{
 			}
 		}
 
+		latMark("prerun:config")
+
 		beadsDir := resolveCommandBeadsDir(dbPath)
 		prepareSelectedCommandContext(beadsDir, true)
 		refreshBoundCommandConfig(cmd)
+
+		latMark("prerun:beads-dir")
 
 		// Workspace operation gate: every command that reaches this point
 		// will open the store (the skipsStoreInit early return is above),
@@ -1286,6 +1294,9 @@ var rootCmd = &cobra.Command{
 		if err := acquireCommandWorkspaceGates(rootCtx, cmd, beadsDir); err != nil {
 			return err
 		}
+
+		latMark("prerun:workspace-gates")
+
 		defer func() {
 			if retErr != nil {
 				// Gate-outlives-store: a PreRunE failure AFTER the store
@@ -1316,8 +1327,12 @@ var rootCmd = &cobra.Command{
 			return HandleError("strict readonly is unavailable for dolt proxied-server backend; refusing to open a store that cannot guarantee mutation-free access")
 		}
 
+		latMark("prerun:config-file")
+
 		// Set actor for audit trail
 		actor = getActorWithGit()
+
+		latMark("prerun:actor")
 		// Attach actor to the command span now that we have it.
 		if commandSpan != nil {
 			commandSpan.SetAttributes(attribute.String("bd.actor", actor))
@@ -1375,6 +1390,8 @@ var rootCmd = &cobra.Command{
 		if policy.runMaintenance && !previewMode {
 			autoMigrateOnVersionBump(beadsDir)
 		}
+
+		latMark("prerun:auto-migrate")
 
 		// Initialize direct storage access
 		var err error
@@ -1481,6 +1498,8 @@ var rootCmd = &cobra.Command{
 		// other helper paths stay in lockstep with the main command path.
 		dolt.ApplyCLIAutoStart(beadsDir, doltCfg)
 
+		latMark("prerun:dolt-autostart")
+
 		databaseOverride := databaseFlag
 		if dbNameFromDBFlag != "" {
 			if databaseOverride != "" && databaseOverride != dbNameFromDBFlag {
@@ -1507,7 +1526,9 @@ var rootCmd = &cobra.Command{
 		// root pre-run, before --dry-run/--inspect has had any effect. Proxied
 		// mode is where that is least visible, not where it is acceptable.
 		if proxiedServerMode {
+			providerDone := latSpan("uow:provider-open")
 			p, err := newProxiedServerUOWProvider(rootCtx, beadsDir, databaseOverride, previewProviderOptions(previewMode)...)
+			providerDone()
 			if err != nil {
 				return HandleError("failed to open uow provider: %v", err)
 			}
@@ -1515,9 +1536,11 @@ var rootCmd = &cobra.Command{
 
 			if !previewMode {
 				reconcileVersionProxiedServer(rootCtx)
+				latMark("prerun:version-reconcile")
 			}
 
 			syncCommandContext()
+			latMark("prerun:done")
 			return nil
 		}
 
@@ -1542,6 +1565,7 @@ var rootCmd = &cobra.Command{
 		// Removing them WILL cause unrecoverable data corruption and data loss.
 		// Dolt manages these files itself; external interference is never safe.
 
+		storeOpenDone := latSpan("store:open")
 		if backend, ok := backends.Lookup(cfg.GetBackend()); ok {
 			if useReadOnly {
 				store, err = backend.OpenReadOnly(rootCtx, beadsDir)
@@ -1551,6 +1575,7 @@ var rootCmd = &cobra.Command{
 		} else {
 			store, err = newDoltStore(rootCtx, doltCfg)
 		}
+		storeOpenDone()
 
 		// Track final read-only state for staleness checks (GH#1089)
 		storeIsReadOnly = doltCfg.ReadOnly
@@ -1614,6 +1639,7 @@ var rootCmd = &cobra.Command{
 			if err := validateWorkspaceIdentity(rootCtx, beadsDir); err != nil {
 				return err
 			}
+			latMark("prerun:identity")
 		}
 
 		// Initialize hook runner using the .beads directory resolved above via
@@ -1649,16 +1675,21 @@ var rootCmd = &cobra.Command{
 			} else if result.Loaded > 0 {
 				debug.Logf("loaded %d molecules from %v", result.Loaded, result.Sources)
 			}
+			latMark("prerun:molecules")
 		}
 
 		// Sync all state to CommandContext for unified access.
 		syncCommandContext()
+
+		latMark("prerun:done")
 
 		// Tips (including sync conflict proactive checks) are shown via maybeShowTip()
 		// after successful command execution, not in PreRun
 		return nil
 	},
 	PersistentPostRunE: func(cmd *cobra.Command, args []string) error {
+		defer latSpan("postrun")()
+
 		// Registered FIRST so it runs LAST: the signal context must outlive
 		// the store/gate cleanup below, which passes rootCtx to
 		// uowProvider.Close. Canceling in the function body (as this used
@@ -2033,6 +2064,8 @@ func validateWorkspaceIdentity(ctx context.Context, beadsDir string) error {
 }
 
 func main() {
+	latMark("main:enter")
+
 	// BD_NAME overrides the binary name in help text (e.g. BD_NAME=ops makes
 	// "ops --help" show "ops" instead of "bd"). Useful for multi-instance
 	// setups where wrapper scripts set BEADS_DIR for routing.
@@ -2047,6 +2080,9 @@ func main() {
 	registerHelpAllFlag()
 
 	executedCmd, err := rootCmd.ExecuteC()
+
+	latMark("cobra:execute")
+	latReport()
 
 	// Finalize queued metrics and detach the uploader. Shared with the os.Exit
 	// guards (CheckReadonly and the pre-run gates) so every exit path flushes the

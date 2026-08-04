@@ -216,12 +216,16 @@ func openAndPrepare(ctx context.Context, in listInput) (uow.UnitOfWork, types.Is
 	if err != nil {
 		return nil, types.IssueFilter{}, err
 	}
+	cfgDone := latSpan("uow:LoadUOWListConfig")
 	cfg, err := workapi.LoadUOWListConfig(ctx, uw)
+	cfgDone()
 	if err != nil {
 		uw.Close(ctx)
 		return nil, types.IssueFilter{}, err
 	}
+	filterDone := latSpan("list:BuildListFilter")
 	filter, err := workapi.BuildListFilter(in.ListRequest, cfg)
+	filterDone()
 	if err != nil {
 		uw.Close(ctx)
 		return nil, types.IssueFilter{}, err
@@ -239,18 +243,24 @@ func runListProxiedHierarchicalParent(ctx context.Context, uw uow.UnitOfWork, in
 		return nil
 	}
 
+	depsDone := latSpan("uow:loadDepsForIssues(tree)")
 	depsByIssueID, err := loadDepsForIssues(ctx, uw, treeIssues)
+	depsDone()
 	if err != nil {
 		return err
 	}
 
+	renderDone := latSpan("list:displayPrettyList(tree)")
 	displayPrettyListWithDepsMode(treeIssues, false, depsByIssueID, in.depsMode)
+	renderDone()
 	printSkipLabelsFooter(in.SkipLabels)
 	return nil
 }
 
 func gatherProxiedHierarchical(ctx context.Context, uw uow.UnitOfWork, parentID string, baseFilter types.IssueFilter) ([]*types.Issue, error) {
+	parentDone := latSpan("uow:GetIssue(parent)")
 	parent, err := uw.IssueUseCase().GetIssue(ctx, parentID)
+	parentDone()
 	if err != nil {
 		return nil, fmt.Errorf("error checking parent issue: %w", err)
 	}
@@ -258,7 +268,9 @@ func gatherProxiedHierarchical(ctx context.Context, uw uow.UnitOfWork, parentID 
 		return nil, fmt.Errorf("parent issue %q not found", parentID)
 	}
 
+	descDone := latSpan("uow:GetDescendants")
 	descendants, err := uw.IssueUseCase().GetDescendants(ctx, parentID, baseFilter)
+	descDone()
 	if err != nil {
 		return nil, fmt.Errorf("error finding descendants: %w", err)
 	}

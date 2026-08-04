@@ -185,7 +185,9 @@ var listCmd = &cobra.Command{
 // flags and calls this core directly rather than listCmd.RunE, which would emit
 // a second "list" event for a single user command.
 func runListCore(cmd *cobra.Command, _ []string) error {
+	gatherDone := latSpan("list:gatherListInput")
 	in, err := gatherListInput(cmd)
+	gatherDone()
 	if err != nil {
 		return err
 	}
@@ -222,15 +224,21 @@ func runListCore(cmd *cobra.Command, _ []string) error {
 	// route or the proxied one. For the modes that do reach it (JSON, plain
 	// text, --watch, --ready) what differs from the HTTP listing is
 	// presentation and the --max-rows cap. See issueops.Reader's doc comment.
+	cfgDone := latSpan("list:LoadStoreListConfig")
 	cfg, err := workapi.LoadStoreListConfig(rootCtx, store)
+	cfgDone()
 	if err != nil {
 		return HandleError("%v", err)
 	}
+	filterDone := latSpan("list:BuildListFilter")
 	filter, err := workapi.BuildListFilter(in.ListRequest, cfg)
+	filterDone()
 	if err != nil {
 		return HandleError("%v", err)
 	}
+	maxRowsDone := latSpan("list:resolveMaxRows")
 	maxRows, maxRowsSource, err := resolveMaxRows(cmd)
+	maxRowsDone()
 	if err != nil {
 		return err
 	}
@@ -240,7 +248,9 @@ func runListCore(cmd *cobra.Command, _ []string) error {
 	ctx := rootCtx
 
 	activeStore := store
+	routedDone := latSpan("list:openRoutedReadStore")
 	routedStore, routed, routingRule, err := openRoutedReadStore(ctx, activeStore)
+	routedDone()
 	if err != nil {
 		return HandleError("%v", err)
 	}
@@ -251,6 +261,7 @@ func runListCore(cmd *cobra.Command, _ []string) error {
 	}
 
 	if in.watchMode {
+		defer latSpan("list:watchIssues")()
 		if err := watchIssues(ctx, activeStore, filter, in.ReadyFlag, in.ParentID, in.SortBy, in.Reverse, in.effectiveLimit); err != nil {
 			if capErr := handleMaxRowsError(err); capErr != nil {
 				return capErr
@@ -264,9 +275,13 @@ func runListCore(cmd *cobra.Command, _ []string) error {
 		var iwc []*types.IssueWithCounts
 		var err error
 		if in.ReadyFlag {
+			queryDone := latSpan("store:GetReadyWorkWithCounts")
 			iwc, err = activeStore.GetReadyWorkWithCounts(ctx, workapi.ReadyFilterFromIssueFilter(workapi.WithFetchOneExtra(filter)))
+			queryDone()
 		} else {
+			queryDone := latSpan("store:SearchIssuesWithCounts")
 			iwc, err = activeStore.SearchIssuesWithCounts(ctx, "", workapi.WithFetchOneExtra(filter))
+			queryDone()
 		}
 		if err != nil {
 			if capErr := handleMaxRowsError(err); capErr != nil {
@@ -274,15 +289,23 @@ func runListCore(cmd *cobra.Command, _ []string) error {
 			}
 			return HandleError("%v", err)
 		}
+		finishDone := latSpan("list:FinishPage")
 		iwc, truncated := workapi.FinishPage(iwc, in.SortBy, in.Reverse, in.effectiveLimit, false)
+		finishDone()
 		if in.SkipLabels {
-			if err := outputJSON(newSkipLabelsListJSONResponse(iwc)); err != nil {
+			jsonDone := latSpan("list:outputJSON")
+			err := outputJSON(newSkipLabelsListJSONResponse(iwc))
+			jsonDone()
+			if err != nil {
 				return err
 			}
 			printTruncationHint(truncated, in.effectiveLimit)
 			return nil
 		}
-		if err := outputJSON(iwc); err != nil {
+		jsonDone := latSpan("list:outputJSON")
+		err = outputJSON(iwc)
+		jsonDone()
+		if err != nil {
 			return err
 		}
 		printTruncationHint(truncated, in.effectiveLimit)
@@ -293,7 +316,9 @@ func runListCore(cmd *cobra.Command, _ []string) error {
 	if in.ReadyFlag {
 		wf := workapi.ReadyFilterFromIssueFilter(workapi.WithFetchOneExtra(filter))
 		var err error
+		queryDone := latSpan("store:GetReadyWork")
 		issues, err = activeStore.GetReadyWork(ctx, wf)
+		queryDone()
 		if err != nil {
 			if capErr := handleMaxRowsError(err); capErr != nil {
 				return capErr
@@ -302,7 +327,9 @@ func runListCore(cmd *cobra.Command, _ []string) error {
 		}
 	} else {
 		var err error
+		queryDone := latSpan("store:SearchIssues")
 		issues, err = activeStore.SearchIssues(ctx, "", workapi.WithFetchOneExtra(filter))
+		queryDone()
 		if err != nil {
 			if capErr := handleMaxRowsError(err); capErr != nil {
 				return capErr
@@ -311,11 +338,15 @@ func runListCore(cmd *cobra.Command, _ []string) error {
 		}
 	}
 
+	finishDone := latSpan("list:FinishPage")
 	issues, truncated := workapi.FinishPage(issues, in.SortBy, in.Reverse, in.effectiveLimit, false)
+	finishDone()
 
 	if in.prettyFormat && !jsonOutput {
 		if in.ParentID != "" && !in.ReadyFlag {
+			treeDone := latSpan("store:getHierarchicalChildren")
 			treeIssues, err := getHierarchicalChildren(ctx, activeStore, "", in.ParentID, filter)
+			treeDone()
 			if err != nil {
 				return HandleError("%v", err)
 			}
@@ -325,35 +356,50 @@ func runListCore(cmd *cobra.Command, _ []string) error {
 				return nil
 			}
 
+			depsDone := latSpan("store:GetAllDependencyRecords(tree)")
 			allDeps, depErr := activeStore.GetAllDependencyRecords(ctx)
+			depsDone()
 			if depErr != nil && in.depsMode != "" {
 				return HandleError("loading dependencies for --deps: %v", depErr)
 			}
+			renderDone := latSpan("list:displayPrettyList(tree)")
 			displayPrettyListWithDepsMode(treeIssues, false, allDeps, in.depsMode)
+			renderDone()
 			printSkipLabelsFooter(in.SkipLabels)
 			return nil
 		}
 
+		depsDone := latSpan("store:GetAllDependencyRecords(pretty)")
 		allDeps, depErr := activeStore.GetAllDependencyRecords(ctx)
+		depsDone()
 		if depErr != nil && in.depsMode != "" {
 			return HandleError("loading dependencies for --deps: %v", depErr)
 		}
+		renderDone := latSpan("list:displayPrettyList")
 		displayPrettyListWithDepsMode(issues, false, allDeps, in.depsMode)
+		renderDone()
 		printTruncationHint(truncated, in.effectiveLimit)
 		printSkipLabelsFooter(in.SkipLabels)
 		return nil
 	}
 
 	if in.formatStr != "" {
+		depsDone := latSpan("store:GetAllDependencyRecords(format)")
 		depsByIssueID, _ := activeStore.GetAllDependencyRecords(ctx)
-		if err := outputFormattedList(issues, depsByIssueID, in.formatStr); err != nil {
+		depsDone()
+		formatDone := latSpan("list:outputFormattedList")
+		err := outputFormattedList(issues, depsByIssueID, in.formatStr)
+		formatDone()
+		if err != nil {
 			return HandleError("%v", err)
 		}
 		printTruncationHint(truncated, in.effectiveLimit)
 		return nil
 	}
 
+	upgradeDone := latSpan("list:maybeShowUpgradeNotification")
 	maybeShowUpgradeNotification()
+	upgradeDone()
 
 	issueIDs := make([]string, len(issues))
 	labelsMap := make(map[string][]string, len(issues))
@@ -364,13 +410,17 @@ func runListCore(cmd *cobra.Command, _ []string) error {
 		}
 	}
 
+	blockingDone := latSpan("store:GetBlockingInfoForIssues")
 	blockedByMap, blocksMap, parentMap, _ := activeStore.GetBlockingInfoForIssues(ctx, issueIDs)
+	blockingDone()
 
+	renderDone := latSpan("list:render")
 	var buf strings.Builder
 	if ui.IsAgentMode() {
 		for _, issue := range issues {
 			formatAgentIssue(&buf, issue, blockedByMap[issue.ID], blocksMap[issue.ID], parentMap[issue.ID])
 		}
+		renderDone()
 		fmt.Print(buf.String())
 		printTruncationHint(truncated, in.effectiveLimit)
 		return nil
@@ -390,16 +440,21 @@ func runListCore(cmd *cobra.Command, _ []string) error {
 	if in.SkipLabels && !isQuiet() {
 		buf.WriteString(skipLabelsFooterText())
 	}
+	renderDone()
 
+	pagerDone := latSpan("list:ToPager")
 	if err := ui.ToPager(buf.String(), ui.PagerOptions{NoPager: in.noPager}); err != nil {
 		if _, writeErr := fmt.Fprint(os.Stdout, buf.String()); writeErr != nil {
 			fmt.Fprintf(os.Stderr, "Error writing output: %v\n", writeErr)
 		}
 	}
+	pagerDone()
 
 	printTruncationHint(truncated, in.effectiveLimit)
 
+	tipDone := latSpan("list:maybeShowTip")
 	maybeShowTip(store)
+	tipDone()
 	return nil
 }
 
