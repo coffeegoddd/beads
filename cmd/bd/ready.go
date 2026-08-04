@@ -106,7 +106,9 @@ This is useful for agents executing molecules to see which steps can run next.`,
 		// The row cap is meaningful on this route alone - the proxied one
 		// rejects a live cap outright - so this is the only caller that hands
 		// the gatherer a resolver for it.
+		gatherDone := latSpan("ready:gatherReadyInput")
 		in, err := gatherReadyInput(cmd, resolveMaxRows)
+		gatherDone()
 		if err != nil {
 			return err
 		}
@@ -118,7 +120,9 @@ This is useful for agents executing molecules to see which steps can run next.`,
 		if claimReady {
 			CheckReadonly("ready --claim")
 		} else {
+			routedDone := latSpan("ready:openRoutedReadStore")
 			routedStore, routed, routingRule, err := openRoutedReadStore(ctx, activeStore)
+			routedDone()
 			if err != nil {
 				return HandleErrorRespectJSON("%v", err)
 			}
@@ -135,11 +139,15 @@ This is useful for agents executing molecules to see which steps can run next.`,
 			// that feeds --json all share one transaction. The listing below
 			// is not on a role and still builds the filter, for the reasons
 			// issueops.Reader's doc comment gives.
+			claimerDone := latSpan("store:ReadyClaimer")
 			claimer, err := activeStore.ReadyClaimer()
+			claimerDone()
 			if err != nil {
 				return HandleErrorRespectJSON("%v", err)
 			}
+			claimDone := latSpan("store:ClaimNext")
 			res, err := claimer.ClaimNext(ctx, claimNextRequest(in))
+			claimDone()
 			if err != nil {
 				// No handleMaxRowsError here, unlike the listing below: the
 				// request carries no cap, so ErrTooManyRows cannot come back.
@@ -154,10 +162,13 @@ This is useful for agents executing molecules to see which steps can run next.`,
 				return nil
 			}
 			claimed := res.Claimed
-			if err := commitPendingIfEmbedded(ctx, activeStore, actor, doltAutoCommitParams{
+			commitDone := latSpan("store:commitPendingIfEmbedded")
+			err = commitPendingIfEmbedded(ctx, activeStore, actor, doltAutoCommitParams{
 				Command:  "ready",
 				IssueIDs: []string{claimed.ID},
-			}); err != nil {
+			})
+			commitDone()
+			if err != nil {
 				return HandleErrorRespectJSON("failed to commit: %v", err)
 			}
 			SetLastTouchedID(claimed.ID)
@@ -169,7 +180,9 @@ This is useful for agents executing molecules to see which steps can run next.`,
 		}
 
 		if jsonOutput {
+			queryDone := latSpan("store:GetReadyWorkWithCounts")
 			results, err := activeStore.GetReadyWorkWithCounts(ctx, filter)
+			queryDone()
 			if err != nil {
 				if capErr := handleMaxRowsError(err); capErr != nil {
 					return capErr
@@ -189,12 +202,17 @@ This is useful for agents executing molecules to see which steps can run next.`,
 				countFilter := filter
 				countFilter.Limit = 0
 				if counter, ok := storage.UnwrapStore(activeStore).(storage.ReadyWorkCounter); ok {
-					if n, countErr := counter.CountReadyWork(ctx, countFilter); countErr == nil && n > len(results) {
+					countDone := latSpan("store:CountReadyWork")
+					n, countErr := counter.CountReadyWork(ctx, countFilter)
+					countDone()
+					if countErr == nil && n > len(results) {
 						totalReady = n
 						truncated = true
 					}
 				} else {
+					countDone := latSpan("store:GetReadyWorkWithCounts(total)")
 					all, countErr := activeStore.GetReadyWorkWithCounts(ctx, countFilter)
+					countDone()
 					if countErr == nil && len(all) > len(results) {
 						totalReady = len(all)
 						truncated = true
@@ -212,7 +230,10 @@ This is useful for agents executing molecules to see which steps can run next.`,
 					Truncated: true,
 				}
 			}
-			if jerr := outputJSONWithPagination(results, pag); jerr != nil {
+			jsonDone := latSpan("ready:outputJSON")
+			jerr := outputJSONWithPagination(results, pag)
+			jsonDone()
+			if jerr != nil {
 				return jerr
 			}
 			if truncated {
@@ -221,7 +242,9 @@ This is useful for agents executing molecules to see which steps can run next.`,
 			return nil
 		}
 
+		queryDone := latSpan("store:GetReadyWork")
 		issues, err := activeStore.GetReadyWork(ctx, filter)
+		queryDone()
 		if err != nil {
 			if capErr := handleMaxRowsError(err); capErr != nil {
 				return capErr
@@ -234,17 +257,24 @@ This is useful for agents executing molecules to see which steps can run next.`,
 		if !jsonOutput && filter.Limit > 0 && len(issues) == filter.Limit {
 			countFilter := filter
 			countFilter.Limit = 0
+			countDone := latSpan("store:GetReadyWork(total)")
 			allIssues, countErr := activeStore.GetReadyWork(ctx, countFilter)
+			countDone()
 			if countErr == nil && len(allIssues) > len(issues) {
 				totalReady = len(allIssues)
 				truncated = true
 			}
 		}
+		upgradeDone := latSpan("ready:maybeShowUpgradeNotification")
 		maybeShowUpgradeNotification()
+		upgradeDone()
 
 		if len(issues) == 0 {
 			hasOpenIssues := false
-			if stats, statsErr := activeStore.GetStatistics(ctx); statsErr == nil {
+			statsDone := latSpan("store:GetStatistics")
+			stats, statsErr := activeStore.GetStatistics(ctx)
+			statsDone()
+			if statsErr == nil {
 				hasOpenIssues = stats.OpenIssues > 0 || stats.InProgressIssues > 0
 			}
 			if hasOpenIssues {
@@ -253,11 +283,16 @@ This is useful for agents executing molecules to see which steps can run next.`,
 			} else {
 				fmt.Printf("\n%s No open issues\n\n", ui.RenderPass("✨"))
 			}
+			tipDone := latSpan("ready:maybeShowTip")
 			maybeShowTip(store)
+			tipDone()
 			return nil
 		}
+		epicDone := latSpan("store:buildParentEpicMap")
 		parentEpicMap := buildParentEpicMap(ctx, activeStore, issues)
+		epicDone()
 
+		renderDone := latSpan("ready:render")
 		usePlain := in.plainFormat || !in.prettyFormat
 		if usePlain {
 			fmt.Printf("\n%s Ready work (%d issues with no active blockers):\n\n", ui.RenderAccent("📋"), len(issues))
@@ -277,12 +312,15 @@ This is useful for agents executing molecules to see which steps can run next.`,
 		} else {
 			displayReadyList(issues, parentEpicMap)
 		}
+		renderDone()
 
 		if truncated {
 			fmt.Printf("%s\n\n", ui.RenderMuted(fmt.Sprintf("Showing %d of %d ready issues. Use -n to show more.", len(issues), totalReady)))
 		}
 
+		tipDone := latSpan("ready:maybeShowTip")
 		maybeShowTip(store)
+		tipDone()
 		return nil
 	},
 }
@@ -351,7 +389,9 @@ func buildParentEpicMap(ctx context.Context, s storage.DoltStorage, issues []*ty
 	for i, issue := range issues {
 		issueIDs[i] = issue.ID
 	}
+	depsDone := latSpan("store:GetDependencyRecordsForIssues(epics)")
 	allDeps, err := s.GetDependencyRecordsForIssues(ctx, issueIDs)
+	depsDone()
 	if err != nil {
 		return nil
 	}
@@ -375,7 +415,9 @@ func buildParentEpicMap(ctx context.Context, s storage.DoltStorage, issues []*ty
 	// Fetch parent issues and filter to epics
 	epicTitles := make(map[string]string) // parentID -> title
 	for parentID := range parentIDs {
+		parentDone := latSpan("store:GetIssue(epic " + parentID + ")")
 		parent, err := s.GetIssue(ctx, parentID)
+		parentDone()
 		if err != nil || parent == nil {
 			continue
 		}
@@ -437,12 +479,16 @@ func runReadyExplain(_ *cobra.Command) error {
 	if err != nil {
 		return HandleErrorRespectJSON("%v", err)
 	}
+	readyDone := latSpan("store:GetReadyWork(explain)")
 	readyIssues, err := activeStore.GetReadyWork(ctx, filter)
+	readyDone()
 	if err != nil {
 		return HandleErrorRespectJSON("%v", err)
 	}
 
+	blockedDone := latSpan("store:GetBlockedIssues")
 	blockedIssues, err := activeStore.GetBlockedIssues(ctx, types.WorkFilter{})
+	blockedDone()
 	if err != nil {
 		return HandleErrorRespectJSON("%v", err)
 	}
@@ -452,17 +498,23 @@ func runReadyExplain(_ *cobra.Command) error {
 	for i, issue := range readyIssues {
 		readyIDs[i] = issue.ID
 	}
+	countsDone := latSpan("store:GetDependencyCounts")
 	depCounts, err := activeStore.GetDependencyCounts(ctx, readyIDs)
+	countsDone()
 	if err != nil {
 		debug.Logf("warning: failed to get dependency counts: %v", err)
 	}
+	depsDone := latSpan("store:GetDependencyRecordsForIssues")
 	allDeps, err := activeStore.GetDependencyRecordsForIssues(ctx, readyIDs)
+	depsDone()
 	if err != nil {
 		debug.Logf("warning: failed to get dependency records: %v", err)
 	}
 
 	// Detect cycles
+	cyclesDone := latSpan("store:DetectCycles")
 	cycles, err := activeStore.DetectCycles(ctx)
+	cyclesDone()
 	if err != nil {
 		debug.Logf("warning: failed to detect cycles: %v", err)
 	}
@@ -480,7 +532,9 @@ func runReadyExplain(_ *cobra.Command) error {
 	}
 
 	// Build ready items with explanations
+	blockersDone := latSpan("store:GetIssuesByIDs(blockers)")
 	blockerIssues, err := activeStore.GetIssuesByIDs(ctx, blockerIDList)
+	blockersDone()
 	if err != nil {
 		debug.Logf("warning: failed to get blocker issues: %v", err)
 	}
@@ -489,9 +543,13 @@ func runReadyExplain(_ *cobra.Command) error {
 		blockerMap[issue.ID] = issue
 	}
 
+	buildDone := latSpan("ready:BuildReadyExplanation")
 	explanation := types.BuildReadyExplanation(readyIssues, blockedIssues, depCounts, allDeps, blockerMap, cycles)
+	buildDone()
 
 	if jsonOutput {
+		jsonDone := latSpan("ready:outputJSON")
+		defer jsonDone()
 		return outputJSON(explanation)
 	}
 
@@ -562,18 +620,24 @@ func runMoleculeReady(_ *cobra.Command, molIDArg string) error {
 		return HandleErrorRespectJSON("no database connection")
 	}
 
+	resolveDone := latSpan("store:ResolvePartialID")
 	moleculeID, err := utils.ResolvePartialID(ctx, store, molIDArg)
+	resolveDone()
 	if err != nil {
 		return HandleErrorRespectJSON("molecule '%s' not found", molIDArg)
 	}
 
+	subgraphDone := latSpan("store:loadTemplateSubgraph")
 	subgraph, err := loadTemplateSubgraph(ctx, store, moleculeID)
+	subgraphDone()
 	if err != nil {
 		return HandleErrorRespectJSON("loading molecule: %v", err)
 	}
 
 	// Get parallel analysis to find ready steps
+	analysisDone := latSpan("ready:analyzeMoleculeParallel")
 	analysis := analyzeMoleculeParallel(subgraph)
+	analysisDone()
 
 	// Collect ready steps
 	var readySteps []*MoleculeReadyStep
@@ -589,6 +653,8 @@ func runMoleculeReady(_ *cobra.Command, molIDArg string) error {
 	}
 
 	if jsonOutput {
+		jsonDone := latSpan("ready:outputJSON")
+		defer jsonDone()
 		return outputJSON(MoleculeReadyOutput{
 			MoleculeID:     moleculeID,
 			MoleculeTitle:  subgraph.Root.Title,

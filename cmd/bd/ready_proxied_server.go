@@ -32,7 +32,9 @@ func runReadyProxiedServer(cmd *cobra.Command, ctx context.Context) error {
 	// --max-rows / BEADS_MAX_ROWS, either to reject a live one or to validate
 	// the value it then ignores for --claim. Resolving it again would repeat
 	// the malformed-value warning and stamp a cap this route cannot enforce.
+	gatherDone := latSpan("ready:gatherReadyInput")
 	in, err := gatherReadyInput(cmd, nil)
+	gatherDone()
 	if err != nil {
 		return err
 	}
@@ -45,7 +47,9 @@ func runReadyProxiedServer(cmd *cobra.Command, ctx context.Context) error {
 		return runReadyProxiedClaim(ctx, in)
 	}
 
+	uowDone := latSpan("uow:NewUOW")
 	uw, err := uowProvider.NewUOW(ctx)
+	uowDone()
 	if err != nil {
 		return HandleErrorRespectJSON("open unit of work: %v", err)
 	}
@@ -112,7 +116,9 @@ func runBlockedProxiedServer(cmd *cobra.Command, ctx context.Context) error {
 
 func runReadyProxiedList(ctx context.Context, uw uow.UnitOfWork, in readyInput) error {
 	if in.jsonOut {
+		queryDone := latSpan("uow:GetReadyWorkWithCounts")
 		page, err := uw.IssueUseCase().GetReadyWorkWithCounts(ctx, in.filter)
+		queryDone()
 		if err != nil {
 			return HandleError("%v", err)
 		}
@@ -133,25 +139,34 @@ func runReadyProxiedList(ctx context.Context, uw uow.UnitOfWork, in readyInput) 
 				Truncated: true,
 			}
 		}
+		jsonDone := latSpan("ready:outputJSON")
 		_ = outputJSONWithPagination(results, pag)
+		jsonDone()
 		if truncated {
 			fmt.Fprintf(os.Stderr, "Showing %d ready issues; more matched but were hidden by --limit. Use --limit 0 for all, or --limit N to raise the cap.\n", len(results))
 		}
 		return nil
 	}
 
+	queryDone := latSpan("uow:GetReadyWork")
 	page, err := uw.IssueUseCase().GetReadyWork(ctx, in.filter)
+	queryDone()
 	if err != nil {
 		return HandleError("%v", err)
 	}
 	issues, truncated := workapi.FinishPage(page.Items, "", false, in.filter.Limit, page.HasMore)
 	truncated = truncated && in.filter.Limit > 0
 
+	upgradeDone := latSpan("ready:maybeShowUpgradeNotification")
 	maybeShowUpgradeNotification()
+	upgradeDone()
 
 	if len(issues) == 0 {
 		hasOpenIssues := false
-		if stats, statsErr := uw.IssueUseCase().GetStatistics(ctx); statsErr == nil {
+		statsDone := latSpan("uow:GetStatistics")
+		stats, statsErr := uw.IssueUseCase().GetStatistics(ctx)
+		statsDone()
+		if statsErr == nil {
 			hasOpenIssues = stats.OpenIssues > 0 || stats.InProgressIssues > 0
 		}
 		if hasOpenIssues {
@@ -163,7 +178,11 @@ func runReadyProxiedList(ctx context.Context, uw uow.UnitOfWork, in readyInput) 
 		return nil
 	}
 
+	epicDone := latSpan("uow:buildParentEpicMap")
 	parentEpicMap := buildParentEpicMapProxied(ctx, uw, issues)
+	epicDone()
+
+	renderDone := latSpan("ready:render")
 	usePlain := in.plainFormat || !in.prettyFormat
 	if usePlain {
 		fmt.Printf("\n%s Ready work (%d issues with no active blockers):\n\n", ui.RenderAccent("📋"), len(issues))
@@ -183,6 +202,7 @@ func runReadyProxiedList(ctx context.Context, uw uow.UnitOfWork, in readyInput) 
 	} else {
 		displayReadyList(issues, parentEpicMap)
 	}
+	renderDone()
 
 	if truncated {
 		fmt.Printf("%s\n\n", ui.RenderMuted(fmt.Sprintf("Showing %d ready issues; more matched but were hidden by --limit. Use --limit 0 for all, or --limit N to raise the cap.", len(issues))))
@@ -199,11 +219,15 @@ func runReadyProxiedList(ctx context.Context, uw uow.UnitOfWork, in readyInput) 
 func runReadyProxiedClaim(ctx context.Context, in readyInput) error {
 	CheckReadonly("ready --claim")
 
+	claimerDone := latSpan("uow:ReadyClaimer")
 	claimer, err := proxiedReadyClaimer()
+	claimerDone()
 	if err != nil {
 		return HandleErrorRespectJSON("%v", err)
 	}
+	claimDone := latSpan("uow:ClaimNext")
 	res, err := claimer.ClaimNext(ctx, claimNextRequest(in))
+	claimDone()
 	if err != nil {
 		return HandleErrorRespectJSON("%v", err)
 	}
@@ -247,13 +271,17 @@ func runReadyProxiedExplain(ctx context.Context, uw uow.UnitOfWork, _ readyInput
 	if err != nil {
 		return HandleErrorRespectJSON("%v", err)
 	}
+	readyDone := latSpan("uow:GetReadyWork(explain)")
 	readyPage, err := uw.IssueUseCase().GetReadyWork(ctx, filter)
+	readyDone()
 	if err != nil {
 		return HandleErrorRespectJSON("%v", err)
 	}
 	readyIssues := readyPage.Items
 
+	blockedDone := latSpan("uow:GetBlockedIssues")
 	blockedIssues, err := uw.IssueUseCase().GetBlockedIssues(ctx, types.WorkFilter{})
+	blockedDone()
 	if err != nil {
 		return HandleErrorRespectJSON("%v", err)
 	}
@@ -262,7 +290,9 @@ func runReadyProxiedExplain(ctx context.Context, uw uow.UnitOfWork, _ readyInput
 	for i, issue := range readyIssues {
 		readyIDs[i] = issue.ID
 	}
+	countsDone := latSpan("uow:CountsByIssueIDs")
 	depCountsMap, err := uw.DependencyUseCase().CountsByIssueIDs(ctx, readyIDs)
+	countsDone()
 	if err != nil {
 		debug.Logf("warning: failed to get dependency counts: %v", err)
 	}
@@ -270,12 +300,16 @@ func runReadyProxiedExplain(ctx context.Context, uw uow.UnitOfWork, _ readyInput
 	for k, v := range depCountsMap {
 		depCounts[k] = v
 	}
+	depsDone := latSpan("uow:GetForIssueIDs")
 	allDeps, err := uw.DependencyUseCase().GetForIssueIDs(ctx, readyIDs)
+	depsDone()
 	if err != nil {
 		debug.Logf("warning: failed to get dependency records: %v", err)
 	}
 
+	cyclesDone := latSpan("uow:DetectCycles")
 	cycles, err := uw.DependencyUseCase().DetectCycles(ctx)
+	cyclesDone()
 	if err != nil {
 		debug.Logf("warning: failed to detect cycles: %v", err)
 	}
@@ -290,11 +324,15 @@ func runReadyProxiedExplain(ctx context.Context, uw uow.UnitOfWork, _ readyInput
 	for id := range allBlockerIDs {
 		blockerIDList = append(blockerIDList, id)
 	}
+	blockersDone := latSpan("uow:GetIssuesByIDs(blockers)")
 	blockerIssues, err := uw.IssueUseCase().GetIssuesByIDs(ctx, blockerIDList)
+	blockersDone()
 	if err != nil {
 		debug.Logf("warning: failed to get blocker issues: %v", err)
 	}
+	wispsDone := latSpan("uow:GetWispsByIDs(blockers)")
 	blockerWisps, err := uw.IssueUseCase().GetWispsByIDs(ctx, blockerIDList)
+	wispsDone()
 	if err != nil {
 		debug.Logf("warning: failed to get blocker wisps: %v", err)
 	}
@@ -306,10 +344,14 @@ func runReadyProxiedExplain(ctx context.Context, uw uow.UnitOfWork, _ readyInput
 		blockerMap[wisp.ID] = wisp
 	}
 
+	buildDone := latSpan("ready:BuildReadyExplanation")
 	explanation := types.BuildReadyExplanation(readyIssues, blockedIssues, depCounts, allDeps, blockerMap, cycles)
+	buildDone()
 
 	if jsonOutput {
+		jsonDone := latSpan("ready:outputJSON")
 		_ = outputJSON(explanation)
+		jsonDone()
 		return nil
 	}
 
@@ -367,12 +409,16 @@ func runReadyProxiedExplain(ctx context.Context, uw uow.UnitOfWork, _ readyInput
 
 func runReadyProxiedMolecule(ctx context.Context, uw uow.UnitOfWork, in readyInput) error {
 	moleculeID := in.molID
+	subgraphDone := latSpan("uow:loadTemplateSubgraph")
 	subgraph, err := loadTemplateSubgraph(ctx, uowMolReader{uw: uw}, moleculeID)
+	subgraphDone()
 	if err != nil {
 		return HandleError("loading molecule: %v", err)
 	}
 
+	analysisDone := latSpan("ready:analyzeMoleculeParallel")
 	analysis := analyzeMoleculeParallel(subgraph)
+	analysisDone()
 
 	var readySteps []*MoleculeReadyStep
 	for _, issue := range subgraph.Issues {
@@ -395,7 +441,9 @@ func runReadyProxiedMolecule(ctx context.Context, uw uow.UnitOfWork, in readyInp
 			Steps:          readySteps,
 			ParallelGroups: analysis.ParallelGroups,
 		}
+		jsonDone := latSpan("ready:outputJSON")
 		_ = outputJSON(output)
+		jsonDone()
 		return nil
 	}
 
@@ -449,10 +497,14 @@ func runReadyProxiedMolecule(ctx context.Context, uw uow.UnitOfWork, in readyInp
 }
 
 func runReadyProxiedGated(ctx context.Context, uw uow.UnitOfWork, _ readyInput) error {
+	gatedDone := latSpan("uow:findGateReadyMolecules")
 	molecules, err := findGateReadyMolecules(ctx, uowMolReader{uw: uw})
+	gatedDone()
 	if err != nil {
 		return HandleErrorRespectJSON("%v", err)
 	}
+	renderDone := latSpan("ready:renderGatedReadyMolecules")
+	defer renderDone()
 	return renderGatedReadyMolecules(molecules)
 }
 
@@ -464,7 +516,9 @@ func buildParentEpicMapProxied(ctx context.Context, uw uow.UnitOfWork, issues []
 	for i, issue := range issues {
 		ids[i] = issue.ID
 	}
+	depsDone := latSpan("uow:GetForIssueIDs(epics)")
 	allDeps, err := uw.DependencyUseCase().GetForIssueIDs(ctx, ids)
+	depsDone()
 	if err != nil {
 		return nil
 	}
@@ -483,7 +537,9 @@ func buildParentEpicMapProxied(ctx context.Context, uw uow.UnitOfWork, issues []
 	}
 	epicTitles := make(map[string]string)
 	for parentID := range parentIDs {
+		parentDone := latSpan("uow:GetIssue(epic " + parentID + ")")
 		parent, err := uw.IssueUseCase().GetIssue(ctx, parentID)
+		parentDone()
 		if err != nil || parent == nil {
 			continue
 		}

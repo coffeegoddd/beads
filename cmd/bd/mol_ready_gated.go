@@ -74,11 +74,15 @@ func runMolReadyGatedCore(_ *cobra.Command, _ []string) error {
 		return HandleErrorRespectJSON("no database connection")
 	}
 
+	gatedDone := latSpan("store:findGateReadyMolecules")
 	molecules, err := findGateReadyMolecules(ctx, store)
+	gatedDone()
 	if err != nil {
 		return HandleErrorRespectJSON("%v", err)
 	}
 
+	renderDone := latSpan("ready:renderGatedReadyMolecules")
+	defer renderDone()
 	return renderGatedReadyMolecules(molecules)
 }
 

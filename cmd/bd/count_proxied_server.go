@@ -8,7 +8,9 @@ import (
 )
 
 func runCountProxiedServer(cmd *cobra.Command, ctx context.Context) error {
+	parseDone := latSpan("count:parseCountFilter")
 	filter, groupBy, issueType, includeInfra, err := parseCountFilter(cmd)
+	parseDone()
 	if err != nil {
 		return err
 	}
@@ -20,7 +22,9 @@ func runCountProxiedServer(cmd *cobra.Command, ctx context.Context) error {
 	defer uw.Close(ctx)
 
 	if includeInfra {
+		cfgDone := latSpan("count:LoadUOWListConfig")
 		cfg, err := workapi.LoadUOWListConfig(ctx, uw)
+		cfgDone()
 		if err != nil {
 			return HandleError("%v", err)
 		}

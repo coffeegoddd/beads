@@ -37,8 +37,13 @@ var versionCmd = &cobra.Command{
 			}
 		}()
 
+		commitDone := latSpan("version:resolveCommitHash")
 		commit := resolveCommitHash()
+		commitDone()
+
+		branchDone := latSpan("version:resolveBranch")
 		branch := resolveBranch()
+		branchDone()
 
 		if jsonOutput {
 			result := map[string]interface{}{
@@ -51,7 +56,10 @@ var versionCmd = &cobra.Command{
 			if branch != "" {
 				result["branch"] = branch
 			}
-			if err := outputJSON(result); err != nil {
+			jsonDone := latSpan("version:outputJSON")
+			err := outputJSON(result)
+			jsonDone()
+			if err != nil {
 				return err
 			}
 		} else {
@@ -65,7 +73,10 @@ var versionCmd = &cobra.Command{
 		}
 
 		// Check for multiple bd binaries in PATH
-		if dups := findDuplicateBinaries(); len(dups) > 1 {
+		dupsDone := latSpan("version:findDuplicateBinaries")
+		dups := findDuplicateBinaries()
+		dupsDone()
+		if len(dups) > 1 {
 			fmt.Fprintf(os.Stderr, "\nWarning: multiple 'bd' binaries found in PATH:\n")
 			for _, p := range dups {
 				fmt.Fprintf(os.Stderr, "  %s\n", p)
@@ -122,7 +133,10 @@ func resolveBranch() string {
 	// Uses CWD repo context since this shows user's current branch
 	if rc, err := beads.GetRepoContext(); err == nil {
 		cmd := rc.GitCmdCWD(context.Background(), "symbolic-ref", "--short", "HEAD")
-		if output, err := cmd.Output(); err == nil {
+		gitDone := latSpan("version:git symbolic-ref")
+		output, err := cmd.Output()
+		gitDone()
+		if err == nil {
 			if branch := strings.TrimSpace(string(output)); branch != "" && branch != "HEAD" {
 				return branch
 			}

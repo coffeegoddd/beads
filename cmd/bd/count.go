@@ -48,14 +48,18 @@ Examples:
 			return runCountProxiedServer(cmd, rootCtx)
 		}
 
+		parseDone := latSpan("count:parseCountFilter")
 		filter, groupBy, issueType, includeInfra, err := parseCountFilter(cmd)
+		parseDone()
 		if err != nil {
 			return err
 		}
 
 		ctx := rootCtx
 		if includeInfra {
+			cfgDone := latSpan("count:LoadStoreListConfig")
 			cfg, err := workapi.LoadStoreListConfig(ctx, store)
+			cfgDone()
 			if err != nil {
 				return HandleError("%v", err)
 			}
@@ -244,11 +248,15 @@ type countBackend interface {
 
 func executeCount(ctx context.Context, backend countBackend, filter types.IssueFilter, groupBy string) error {
 	if groupBy == "" {
+		countDone := latSpan("count:CountIssues")
 		count, err := backend.CountIssues(ctx, "", filter)
+		countDone()
 		if err != nil {
 			return HandleErrorRespectJSON("%v", err)
 		}
 		if jsonOutput {
+			jsonDone := latSpan("count:outputJSON")
+			defer jsonDone()
 			return outputJSON(struct {
 				Count int64 `json:"count"`
 			}{Count: count})
@@ -257,7 +265,9 @@ func executeCount(ctx context.Context, backend countBackend, filter types.IssueF
 		return nil
 	}
 
+	groupDone := latSpan("count:CountIssuesByGroup")
 	counts, err := backend.CountIssuesByGroup(ctx, filter, groupBy)
+	groupDone()
 	if err != nil {
 		return HandleErrorRespectJSON("%v", err)
 	}
@@ -274,7 +284,9 @@ func executeCount(ctx context.Context, backend countBackend, filter types.IssueF
 
 	// --by-label buckets are not mutually exclusive, so use CountIssues for the total
 	// to avoid double-counting multi-label issues.
+	totalDone := latSpan("count:CountIssues(total)")
 	total, err := backend.CountIssues(ctx, "", filter)
+	totalDone()
 	if err != nil {
 		return HandleErrorRespectJSON("%v", err)
 	}
@@ -284,6 +296,8 @@ func executeCount(ctx context.Context, backend countBackend, filter types.IssueF
 	})
 
 	if jsonOutput {
+		jsonDone := latSpan("count:outputJSON")
+		defer jsonDone()
 		return outputJSON(struct {
 			Total  int64        `json:"total"`
 			Groups []GroupCount `json:"groups"`

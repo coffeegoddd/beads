@@ -88,16 +88,22 @@ Examples:
 		var stats *types.Statistics
 		var err error
 		if noBlocked {
+			statsDone := latSpan("store:GetStatisticsNoBlocked")
 			stats, err = store.GetStatisticsNoBlocked(ctx)
+			statsDone()
 		} else {
+			statsDone := latSpan("store:GetStatistics")
 			stats, err = store.GetStatistics(ctx)
+			statsDone()
 		}
 		if err != nil {
 			return HandleErrorRespectJSON("%v", err)
 		}
 
 		if showAssigned {
+			assignedDone := latSpan("status:getAssignedStatistics")
 			stats = getAssignedStatistics(actor)
+			assignedDone()
 			if stats == nil {
 				return HandleErrorRespectJSON("failed to get assigned statistics")
 			}
@@ -105,9 +111,13 @@ Examples:
 
 		var recentActivity *RecentActivitySummary
 		if !noActivity {
+			activityDone := latSpan("status:getGitActivity")
 			recentActivity = getGitActivity(24)
+			activityDone()
 		}
 
+		renderDone := latSpan("status:renderStatus")
+		defer renderDone()
 		return renderStatus(stats, recentActivity)
 	},
 }
@@ -120,6 +130,8 @@ func renderStatus(stats *types.Statistics, recentActivity *RecentActivitySummary
 	}
 
 	if jsonOutput {
+		jsonDone := latSpan("status:outputJSON")
+		defer jsonDone()
 		return outputJSON(output)
 	}
 
@@ -195,13 +207,17 @@ func getAssignedStatistics(assignee string) *types.Statistics {
 	ctx := rootCtx
 
 	assigneePtr := assignee
+	searchDone := latSpan("store:SearchIssues(assigned)")
 	issues, err := store.SearchIssues(ctx, "", types.IssueFilter{Assignee: &assigneePtr})
+	searchDone()
 	if err != nil {
 		return nil
 	}
 
 	readyCount := 0
+	readyDone := latSpan("store:GetReadyWork(assigned)")
 	readyIssues, err := store.GetReadyWork(ctx, types.WorkFilter{Assignee: &assigneePtr})
+	readyDone()
 	if err == nil {
 		readyCount = len(readyIssues)
 	}

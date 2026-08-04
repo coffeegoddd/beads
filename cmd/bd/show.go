@@ -64,7 +64,9 @@ var showCmd = &cobra.Command{
 			if len(args) > 0 {
 				return HandleErrorRespectJSON("--current cannot be combined with explicit issue IDs")
 			}
+			currentDone := latSpan("show:resolveCurrentIssueID")
 			currentID := resolveCurrentIssueID(ctx)
+			currentDone()
 			if currentID == "" {
 				return HandleErrorRespectJSON("no current issue found (no in-progress, hooked, or recently touched issues)")
 			}
@@ -76,6 +78,8 @@ var showCmd = &cobra.Command{
 		}
 
 		if asOfRef != "" {
+			asOfDone := latSpan("show:showIssueAsOf")
+			defer asOfDone()
 			return showIssueAsOf(ctx, args, asOfRef, shortMode)
 		}
 
@@ -92,21 +96,29 @@ var showCmd = &cobra.Command{
 
 		if showThread {
 			if len(args) > 0 {
+				resolveDone := latSpan("store:resolveAndGetIssueWithRouting(" + args[0] + ")")
 				result, err := resolveAndGetIssueWithRouting(ctx, store, args[0])
+				resolveDone()
 				if result != nil {
 					defer result.Close()
 				}
 				if err == nil && result != nil && result.ResolvedID != "" {
+					threadDone := latSpan("show:showMessageThread")
+					defer threadDone()
 					return showMessageThread(ctx, result.ResolvedID, jsonOutput)
 				}
 			}
 		}
 
 		if showRefs {
+			refsDone := latSpan("show:showIssueRefs")
+			defer refsDone()
 			return showIssueRefs(ctx, args, jsonOutput)
 		}
 
 		if showChildren {
+			childrenDone := latSpan("show:showIssueChildren")
+			defer childrenDone()
 			return showIssueChildren(ctx, args, jsonOutput, shortMode)
 		}
 
@@ -115,7 +127,9 @@ var showCmd = &cobra.Command{
 		foundCount := 0
 		for idx, id := range args {
 			// Resolve and get issue with routing (e.g., gt-xyz routes to another rig)
+			resolveDone := latSpan("store:resolveAndGetIssueWithRouting(" + id + ")")
 			result, err := resolveAndGetIssueWithRouting(ctx, store, id)
+			resolveDone()
 			if err != nil {
 				if result != nil {
 					result.Close()
@@ -155,16 +169,20 @@ var showCmd = &cobra.Command{
 				// purpose: an affordance that can answer with a different
 				// issue than the caller named has no place on a contract an
 				// unattended HTTP client also calls.
+				readerDone := latSpan("store:IssueReader")
 				rd, rerr := issueStore.IssueReader()
+				readerDone()
 				if rerr != nil {
 					result.Close()
 					return HandleErrorRespectJSON("%v", rerr)
 				}
+				getDone := latSpan("store:Reader.Get(" + issue.ID + ")")
 				details, derr := rd.Get(ctx, issueops.GetRequest{
 					ID:                issue.ID,
 					IncludeDependents: includeDepends,
 					IncludeComments:   includeComments,
 				})
+				getDone()
 				if derr != nil {
 					result.Close()
 					return HandleErrorRespectJSON("%v", derr)
@@ -215,7 +233,9 @@ var showCmd = &cobra.Command{
 			}
 
 			// Show labels
+			labelsDone := latSpan("store:GetLabels(" + issue.ID + ")")
 			labels, _ := issueStore.GetLabels(ctx, issue.ID) // Best effort: show issue even if label fetch fails
+			labelsDone()
 			if len(labels) > 0 {
 				fmt.Printf("\n%s %s\n", ui.RenderBold("LABELS:"), strings.Join(labels, ", "))
 			}
@@ -230,7 +250,9 @@ var showCmd = &cobra.Command{
 			relatedSeen := make(map[string]*types.IssueWithDependencyMetadata)
 
 			// Show dependencies - grouped by dependency type for clarity
+			depsDone := latSpan("store:GetDependenciesWithMetadata(" + issue.ID + ")")
 			depsWithMeta, _ := issueStore.GetDependenciesWithMetadata(ctx, issue.ID) // Best effort: show issue even if deps unavailable
+			depsDone()
 
 			if len(depsWithMeta) > 0 {
 				// Group by dependency type
@@ -271,7 +293,9 @@ var showCmd = &cobra.Command{
 			}
 
 			// Show dependents - grouped by dependency type for clarity
+			dependentsDone := latSpan("store:GetDependentsWithMetadata(" + issue.ID + ")")
 			dependentsWithMeta, _ := issueStore.GetDependentsWithMetadata(ctx, issue.ID) // Best effort: show issue even if dependents unavailable
+			dependentsDone()
 			if len(dependentsWithMeta) > 0 {
 				// Group by dependency type
 				var blocks, children, discovered []*types.IssueWithDependencyMetadata
@@ -337,7 +361,9 @@ var showCmd = &cobra.Command{
 			}
 
 			// Show comments
+			commentsDone := latSpan("store:GetIssueComments(" + issue.ID + ")")
 			comments, _ := issueStore.GetIssueComments(ctx, issue.ID) // Best effort: show issue even if comments unavailable
+			commentsDone()
 			if len(comments) > 0 {
 				fmt.Printf("\n%s\n", ui.RenderBold("COMMENTS"))
 				for _, comment := range comments {
@@ -361,14 +387,19 @@ var showCmd = &cobra.Command{
 
 		if jsonOutput {
 			if len(allDetails) > 0 {
-				if jerr := outputJSON(allDetails); jerr != nil {
+				jsonDone := latSpan("show:outputJSON")
+				jerr := outputJSON(allDetails)
+				jsonDone()
+				if jerr != nil {
 					return jerr
 				}
 			} else {
 				return HandleErrorRespectJSON("no issues found matching the provided IDs")
 			}
 		} else if foundCount > 0 {
+			tipDone := latSpan("show:maybeShowTip")
 			maybeShowTip(store)
+			tipDone()
 		} else {
 			if len(args) > 0 {
 				SetLastTouchedID(args[0])

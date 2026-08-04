@@ -107,7 +107,9 @@ func runShowProxiedServer(cmd *cobra.Command, ctx context.Context, args []string
 		if len(in.ids) > 0 {
 			return HandleErrorRespectJSON("--current cannot be combined with explicit issue IDs")
 		}
+		currentDone := latSpan("show:resolveCurrentIssueID")
 		currentID := resolveCurrentIssueIDProxied(ctx, uw)
+		currentDone()
 		if currentID == "" {
 			return HandleErrorRespectJSON("no current issue found (no in-progress, hooked, or recently touched issues)")
 		}
@@ -138,15 +140,19 @@ func runShowProxiedServer(cmd *cobra.Command, ctx context.Context, args []string
 // shape. The domain-shaped reads live in internal/workapi.
 func proxiedListDeps(ctx context.Context, uw uow.UnitOfWork, id string, isWisp bool, filter domain.DepListFilter) ([]*types.IssueWithDependencyMetadata, error) {
 	if isWisp {
+		defer latSpan("uow:ListWispWithIssueMetadata(" + id + ")")()
 		return uw.DependencyUseCase().ListWispWithIssueMetadata(ctx, id, filter)
 	}
+	defer latSpan("uow:ListWithIssueMetadata(" + id + ")")()
 	return uw.DependencyUseCase().ListWithIssueMetadata(ctx, id, filter)
 }
 
 func proxiedGetComments(ctx context.Context, uw uow.UnitOfWork, id string, isWisp bool) ([]*types.Comment, error) {
 	if isWisp {
+		defer latSpan("uow:GetCommentsForWisp(" + id + ")")()
 		return uw.CommentUseCase().GetCommentsForWisp(ctx, id)
 	}
+	defer latSpan("uow:GetCommentsForIssue(" + id + ")")()
 	return uw.CommentUseCase().GetCommentsForIssue(ctx, id)
 }
 
@@ -166,7 +172,9 @@ func reportIssueLookupFailure(verb, id string, err error) {
 func runShowProxiedAsOf(ctx context.Context, uw uow.UnitOfWork, in *showProxiedInput) {
 	var jsonIssues []*types.Issue
 	for idx, id := range in.ids {
+		asOfDone := latSpan("uow:AsOf(" + id + ")")
 		issue, err := uw.IssueUseCase().AsOf(ctx, id, in.asOfRef)
+		asOfDone()
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Error fetching %s as of %s: %v\n", id, in.asOfRef, err)
 			continue
@@ -446,11 +454,13 @@ func runShowProxiedDefault(ctx context.Context, uw uow.UnitOfWork, in *showProxi
 	foundCount := 0
 	for idx, id := range in.ids {
 		if rd != nil {
+			getDone := latSpan("uow:Reader.Get(" + id + ")")
 			details, derr := rd.Get(ctx, issueops.GetRequest{
 				ID:                id,
 				IncludeDependents: in.includeDepends,
 				IncludeComments:   in.includeComments,
 			})
+			getDone()
 			if derr != nil {
 				if errors.Is(derr, storage.ErrNotFound) {
 					// The corpus pins this pair for a missing id: the human
@@ -472,7 +482,9 @@ func runShowProxiedDefault(ctx context.Context, uw uow.UnitOfWork, in *showProxi
 			continue
 		}
 
+		lookupDone := latSpan("uow:GetIssueOrWisp(" + id + ")")
 		issue, isWisp, err := workapi.GetIssueOrWisp(ctx, src, id)
+		lookupDone()
 		if err != nil {
 			reportIssueLookupFailure("fetching", id, err)
 			continue
@@ -484,12 +496,16 @@ func runShowProxiedDefault(ctx context.Context, uw uow.UnitOfWork, in *showProxi
 			continue
 		}
 
+		renderDone := latSpan("show:render(" + id + ")")
 		proxiedRenderIssue(ctx, uw, issue, isWisp, in, idx, formatTime)
+		renderDone()
 	}
 
 	if jsonOutput {
 		if len(allDetails) > 0 {
+			jsonDone := latSpan("show:outputJSON")
 			_ = outputJSON(allDetails)
+			jsonDone()
 		} else {
 			return HandleErrorRespectJSON("no issues found matching the provided IDs")
 		}
@@ -534,11 +550,13 @@ func proxiedRenderIssue(ctx context.Context, uw uow.UnitOfWork, issue *types.Iss
 	}
 
 	var labels []string
+	labelsDone := latSpan("uow:GetLabels(" + issue.ID + ")")
 	if isWisp {
 		labels, _ = uw.LabelUseCase().GetWispLabels(ctx, issue.ID)
 	} else {
 		labels, _ = uw.LabelUseCase().GetLabels(ctx, issue.ID)
 	}
+	labelsDone()
 	if len(labels) > 0 {
 		fmt.Printf("\n%s %s\n", ui.RenderBold("LABELS:"), strings.Join(labels, ", "))
 	}
