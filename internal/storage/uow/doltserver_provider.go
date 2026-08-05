@@ -10,6 +10,7 @@ import (
 	_ "github.com/go-sql-driver/mysql"
 
 	"github.com/steveyegge/beads/internal/config"
+	"github.com/steveyegge/beads/internal/latency"
 	"github.com/steveyegge/beads/internal/storage/dbproxy/proxy"
 )
 
@@ -45,19 +46,26 @@ func NewDoltServerUOWProvider(
 		return nil, fmt.Errorf("uow: doltBinExec must not be empty")
 	}
 
+	absDone := latency.Span("uow:filepath.Abs")
 	absServerRootDir, err := filepath.Abs(serverRootDir)
 	if err != nil {
+		absDone()
 		return nil, fmt.Errorf("uow: resolving server root dir: %w", err)
 	}
 	absDoltBinExec, err := filepath.Abs(doltBinExec)
+	absDone()
 	if err != nil {
 		return nil, fmt.Errorf("uow: resolving dolt bin exec: %w", err)
 	}
 
-	if err := os.MkdirAll(absServerRootDir, config.BeadsDirPerm); err != nil {
-		return nil, fmt.Errorf("uow: creating server root directory: %w", err)
+	mkdirDone := latency.Span("uow:mkdirServerRoot")
+	mkdirErr := os.MkdirAll(absServerRootDir, config.BeadsDirPerm)
+	mkdirDone()
+	if mkdirErr != nil {
+		return nil, fmt.Errorf("uow: creating server root directory: %w", mkdirErr)
 	}
 
+	endpointDone := latency.Span("uow:GetCreateDatabaseProxyServerEndpoint")
 	ep, err := proxy.GetCreateDatabaseProxyServerEndpoint(absServerRootDir, proxy.OpenOpts{
 		Backend:        backend,
 		ConfigFilePath: serverConfigFilePath,
@@ -67,6 +75,7 @@ func NewDoltServerUOWProvider(
 		IdleTimeout:    idleTimeout,
 		Port:           proxyPort,
 	})
+	endpointDone()
 	if err != nil {
 		return nil, fmt.Errorf("uow: get proxy endpoint: %w", err)
 	}

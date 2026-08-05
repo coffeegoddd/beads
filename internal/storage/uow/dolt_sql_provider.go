@@ -10,6 +10,7 @@ import (
 	"github.com/cenkalti/backoff/v4"
 	_ "github.com/go-sql-driver/mysql"
 
+	"github.com/steveyegge/beads/internal/latency"
 	"github.com/steveyegge/beads/internal/storage/dbproxy/proxy"
 	"github.com/steveyegge/beads/internal/storage/dbproxy/util"
 	db "github.com/steveyegge/beads/internal/storage/domain/db"
@@ -165,6 +166,7 @@ func (p *doltSQLProvider) initSchema(ctx context.Context, database string) error
 	created := false
 	var bootstrapHeal *schema.FreshBootstrapHealCapability
 	prepareBootstrap := func(ctx context.Context, conn *sql.Conn) (*schema.FreshBootstrapHealCapability, error) {
+		defer latency.Span("initSchema:prepareBootstrap")()
 		ddl := db.NewDDLSQLRepository(conn)
 		justCreated := false
 		if created {
@@ -213,8 +215,14 @@ func (p *doltSQLProvider) initSchema(ctx context.Context, database string) error
 		}
 		return bootstrapHeal, nil
 	}
+	attempt := 0
 	return backoff.Retry(func() error {
+		attempt++
+		suffix := fmt.Sprintf("#%d", attempt)
+
+		pinDone := latency.Span("initSchema:pinConn" + suffix)
 		conn, err := p.db.Conn(ctx)
+		pinDone()
 		if err != nil {
 			if isSerializationError(err) {
 				return fmt.Errorf("uow: pin connection: %w", err)
@@ -225,27 +233,36 @@ func (p *doltSQLProvider) initSchema(ctx context.Context, database string) error
 
 		ddl := db.NewDDLSQLRepository(conn)
 		if p.teamServer {
-			if err := ddl.UseDatabase(ctx, database); err != nil {
-				if isSerializationError(err) {
-					return fmt.Errorf("uow: switching to database: %w", err)
+			useDone := latency.Span("initSchema:UseDatabase" + suffix)
+			useErr := ddl.UseDatabase(ctx, database)
+			useDone()
+			if useErr != nil {
+				if isSerializationError(useErr) {
+					return fmt.Errorf("uow: switching to database: %w", useErr)
 				}
 				return backoff.Permanent(fmt.Errorf(
 					"uow: database %q not found — the schema is managed by beads-team-server; ask your operator to run 'bts init' first: %w",
-					database, err))
+					database, useErr))
 			}
-			if err := checkTeamServerSchema(ctx, conn, database); err != nil {
-				if isSerializationError(err) {
-					return fmt.Errorf("uow: team-server schema check: %w", err)
+			schemaCheckDone := latency.Span("initSchema:checkTeamServerSchema" + suffix)
+			schemaCheckErr := checkTeamServerSchema(ctx, conn, database)
+			schemaCheckDone()
+			if schemaCheckErr != nil {
+				if isSerializationError(schemaCheckErr) {
+					return fmt.Errorf("uow: team-server schema check: %w", schemaCheckErr)
 				}
-				return backoff.Permanent(err)
+				return backoff.Permanent(schemaCheckErr)
 			}
 			// Identity is checked only after the schema check proves the
 			// metadata table exists at this binary's version.
-			if err := checkTeamServerIdentity(ctx, conn, database, p.expectedProjectID); err != nil {
-				if isSerializationError(err) {
-					return fmt.Errorf("uow: team-server identity check: %w", err)
+			identityDone := latency.Span("initSchema:checkTeamServerIdentity" + suffix)
+			identityErr := checkTeamServerIdentity(ctx, conn, database, p.expectedProjectID)
+			identityDone()
+			if identityErr != nil {
+				if isSerializationError(identityErr) {
+					return fmt.Errorf("uow: team-server identity check: %w", identityErr)
 				}
-				return backoff.Permanent(err)
+				return backoff.Permanent(identityErr)
 			}
 			return nil
 		}
@@ -254,19 +271,25 @@ func (p *doltSQLProvider) initSchema(ctx context.Context, database string) error
 			// stop. No CreateDatabase, no MigrateUpWithLock — a --dry-run or
 			// --inspect that migrated the workspace before rendering its plan
 			// would be the exact side effect the flag exists to prevent.
-			if err := ddl.UseDatabase(ctx, database); err != nil {
-				if isSerializationError(err) {
-					return fmt.Errorf("uow: switching to database: %w", err)
+			useDone := latency.Span("initSchema:UseDatabase(preview)" + suffix)
+			useErr := ddl.UseDatabase(ctx, database)
+			useDone()
+			if useErr != nil {
+				if isSerializationError(useErr) {
+					return fmt.Errorf("uow: switching to database: %w", useErr)
 				}
 				return backoff.Permanent(fmt.Errorf(
 					"uow: database %q not found — preview commands (--dry-run, --inspect) never create or migrate a database; run the command without the preview flag first: %w",
-					database, err))
+					database, useErr))
 			}
 			return nil
 		}
-		if _, err := schema.MigrateUpWithLock(ctx, conn, database,
-			schema.WithLockedPreparation(p.serverEndpoint, prepareBootstrap)); err != nil {
-			return classifyInitSchemaError(err)
+		migrateDone := latency.Span("initSchema:MigrateUpWithLock" + suffix)
+		_, migrateErr := schema.MigrateUpWithLock(ctx, conn, database,
+			schema.WithLockedPreparation(p.serverEndpoint, prepareBootstrap))
+		migrateDone()
+		if migrateErr != nil {
+			return classifyInitSchemaError(migrateErr)
 		}
 		return nil
 	}, backoff.WithContext(bo, ctx))
@@ -285,18 +308,25 @@ func buildDSN(ep proxy.Endpoint, database, user, password, tlsConfigName string)
 }
 
 func openDB(ctx context.Context, dsn string) (*sql.DB, error) {
+	openDone := latency.Span("uow:sql.Open")
 	conn, err := sql.Open("mysql", dsn)
+	openDone()
 	if err != nil {
 		return nil, fmt.Errorf("uow: open db: %w", err)
 	}
-	if err := conn.PingContext(ctx); err != nil {
-		return nil, errors.Join(fmt.Errorf("uow: ping db: %w", err), conn.Close())
+	pingDone := latency.Span("uow:db.Ping")
+	pingErr := conn.PingContext(ctx)
+	pingDone()
+	if pingErr != nil {
+		return nil, errors.Join(fmt.Errorf("uow: ping db: %w", pingErr), conn.Close())
 	}
 	return conn, nil
 }
 
 func openAndInitSchema(ctx context.Context, ep proxy.Endpoint, database, rootUser, rootPassword, tlsConfigName string, teamServer bool, expectedProjectID string, opts providerOptions) (UnitOfWorkProvider, error) {
+	initOpenDone := latency.Span("uow:openDB(init)")
 	initDB, err := openDB(ctx, buildDSN(ep, "", rootUser, rootPassword, tlsConfigName))
+	initOpenDone()
 	if err != nil {
 		return nil, err
 	}
@@ -310,16 +340,24 @@ func openAndInitSchema(ctx context.Context, ep proxy.Endpoint, database, rootUse
 		preview:           opts.preview,
 	}
 
-	if err := initProvider.initSchema(ctx, database); err != nil {
+	initSchemaDone := latency.Span("uow:initSchema")
+	initSchemaErr := initProvider.initSchema(ctx, database)
+	initSchemaDone()
+	if initSchemaErr != nil {
 		_ = initDB.Close()
-		return nil, fmt.Errorf("uow: init schema: %w", err)
+		return nil, fmt.Errorf("uow: init schema: %w", initSchemaErr)
 	}
 
-	if err := initDB.Close(); err != nil {
-		return nil, fmt.Errorf("uow: close init db: %w", err)
+	closeDone := latency.Span("uow:closeInitDB")
+	closeErr := initDB.Close()
+	closeDone()
+	if closeErr != nil {
+		return nil, fmt.Errorf("uow: close init db: %w", closeErr)
 	}
 
+	dbOpenDone := latency.Span("uow:openDB(database)")
 	dbConn, err := openDB(ctx, buildDSN(ep, database, rootUser, rootPassword, tlsConfigName))
+	dbOpenDone()
 	if err != nil {
 		return nil, err
 	}

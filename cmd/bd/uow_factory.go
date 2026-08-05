@@ -88,7 +88,9 @@ func openProxiedServerUOWProvider(ctx context.Context, beadsDir, databaseOverrid
 	if beadsDir == "" {
 		return nil, fmt.Errorf("newProxiedServerUOWProvider: beadsDir must be set")
 	}
+	topologyDone := latSpan("provider:resolveTopology")
 	topology, err := resolveProxiedServerUOWTopology(beadsDir, databaseOverride, posture)
+	topologyDone()
 	if err != nil {
 		return nil, err
 	}
@@ -112,12 +114,15 @@ func newSQLServerUOWProvider(ctx context.Context, beadsDir string, topology sqlS
 // writes land in the wrong database (split-brain) — and the identity assertion
 // below silently degrades to no assertion at all.
 func resolveProxiedServerUOWTopology(beadsDir, databaseOverride string, posture identityPosture) (sqlServerUOWTopology, error) {
+    loadDone := latSpan("provider:configfile.Load")
 	persisted, err := configfile.Load(beadsDir)
 	if err != nil {
+	    loadDone()
 		return sqlServerUOWTopology{}, fmt.Errorf(
 			"corrupt workspace config %s: %w — refusing to fall back to a fresh database; repair or remove the file to proceed",
 			configfile.ConfigPath(beadsDir), err)
 	}
+	loadDone()
 	topology := sqlServerUOWTopology{database: configfile.DefaultDoltDatabase}
 	if persisted != nil {
 		topology.database = persisted.GetDoltDatabase()
@@ -140,12 +145,15 @@ func resolveProxiedServerUOWTopology(beadsDir, databaseOverride string, posture 
 		topology.database = databaseOverride
 	}
 
+    clientInfoDone := latSpan("provider:LoadProxiedServerClientInfo")
 	info, err := configfile.LoadProxiedServerClientInfo(beadsDir)
 	if err != nil {
+	    clientInfoDone()
 		return sqlServerUOWTopology{}, fmt.Errorf(
 			"corrupt proxied-server sidecar %s: %w — refusing to fall back to a fresh database; repair or remove the file to proceed",
 			configfile.ProxiedServerClientInfoPath(beadsDir), err)
 	}
+	clientInfoDone()
 	if info != nil {
 		topology.proxyPort = info.Port
 		topology.proxyIdle = info.IdleTimeout
@@ -324,28 +332,42 @@ func resolveServerModeUOWTopologyWithTransportResolver(ctx context.Context, bead
 // the paths it resolves (root, log) are the same ones proxied mode uses because
 // both modes root their server at the same directory.
 func newExternalProxiedServerUOWProvider(ctx context.Context, beadsDir string, topology sqlServerUOWTopology, opts ...uow.ProviderOption) (uow.UnitOfWorkProvider, error) {
+	rootPathDone := latSpan("provider:resolveRootPath")
 	rootPath, err := resolveProxiedServerRootPath(beadsDir)
+	rootPathDone()
 	if err != nil {
 		return nil, fmt.Errorf("newExternalProxiedServerUOWProvider: resolve root path: %w", err)
 	}
-	if err := validateProxiedServerRootPath(rootPath); err != nil {
-		return nil, fmt.Errorf("newExternalProxiedServerUOWProvider: proxied server root (from env or %s): %w", configfile.ProxiedServerClientInfoFileName, err)
+	validateRootDone := latSpan("provider:validateRootPath")
+	rootPathErr := validateProxiedServerRootPath(rootPath)
+	validateRootDone()
+	if rootPathErr != nil {
+		return nil, fmt.Errorf("newExternalProxiedServerUOWProvider: proxied server root (from env or %s): %w", configfile.ProxiedServerClientInfoFileName, rootPathErr)
 	}
 
+	logPathDone := latSpan("provider:resolveLogPath")
 	logPath, isCustomLog, err := resolveProxiedServerLogPath(beadsDir)
+	logPathDone()
 	if err != nil {
 		return nil, fmt.Errorf("newExternalProxiedServerUOWProvider: resolve log path: %w", err)
 	}
 	if isCustomLog {
-		if err := validateProxiedServerLogPath(logPath); err != nil {
-			return nil, fmt.Errorf("newExternalProxiedServerUOWProvider: proxied server log (from env or %s): %w", configfile.ProxiedServerClientInfoFileName, err)
+		validateLogDone := latSpan("provider:validateLogPath")
+		logPathErr := validateProxiedServerLogPath(logPath)
+		validateLogDone()
+		if logPathErr != nil {
+			return nil, fmt.Errorf("newExternalProxiedServerUOWProvider: proxied server log (from env or %s): %w", configfile.ProxiedServerClientInfoFileName, logPathErr)
 		}
 	}
 
-	if err := os.MkdirAll(rootPath, config.BeadsDirPerm); err != nil {
-		return nil, fmt.Errorf("newExternalProxiedServerUOWProvider: mkdir %s: %w", rootPath, err)
+	mkdirDone := latSpan("provider:mkdirRootPath")
+	mkdirErr := os.MkdirAll(rootPath, config.BeadsDirPerm)
+	mkdirDone()
+	if mkdirErr != nil {
+		return nil, fmt.Errorf("newExternalProxiedServerUOWProvider: mkdir %s: %w", rootPath, mkdirErr)
 	}
 
+	defer latSpan("provider:NewExternalDoltServerUOWProvider")()
 	return uow.NewExternalDoltServerUOWProvider(
 		ctx,
 		rootPath,
@@ -363,34 +385,49 @@ func newExternalProxiedServerUOWProvider(ctx context.Context, beadsDir string, t
 }
 
 func newManagedProxiedServerUOWProvider(ctx context.Context, beadsDir string, topology sqlServerUOWTopology, opts ...uow.ProviderOption) (uow.UnitOfWorkProvider, error) {
+	lookPathDone := latSpan("provider:exec.LookPath(dolt)")
 	doltBin, err := exec.LookPath("dolt")
+	lookPathDone()
 	if err != nil {
 		return nil, fmt.Errorf("newProxiedServerUOWProvider: dolt is not installed (not found in PATH); install from https://docs.dolthub.com/introduction/installation: %w", err)
 	}
 
+	rootPathDone := latSpan("provider:resolveRootPath")
 	rootPath, err := resolveProxiedServerRootPath(beadsDir)
+	rootPathDone()
 	if err != nil {
 		return nil, fmt.Errorf("newProxiedServerUOWProvider: resolve root path: %w", err)
 	}
-	if err := validateProxiedServerRootPath(rootPath); err != nil {
-		return nil, fmt.Errorf("newProxiedServerUOWProvider: proxied server root (from env or %s): %w", configfile.ProxiedServerClientInfoFileName, err)
+	validateRootDone := latSpan("provider:validateRootPath")
+	rootPathErr := validateProxiedServerRootPath(rootPath)
+	validateRootDone()
+	if rootPathErr != nil {
+		return nil, fmt.Errorf("newProxiedServerUOWProvider: proxied server root (from env or %s): %w", configfile.ProxiedServerClientInfoFileName, rootPathErr)
 	}
 
+	configDone := latSpan("provider:ensureProxiedServerConfig")
 	configPath, err := ensureProxiedServerConfig(beadsDir)
+	configDone()
 	if err != nil {
 		return nil, err
 	}
 
+	logPathDone := latSpan("provider:resolveLogPath")
 	logPath, isCustomLog, err := resolveProxiedServerLogPath(beadsDir)
+	logPathDone()
 	if err != nil {
 		return nil, fmt.Errorf("newProxiedServerUOWProvider: resolve log path: %w", err)
 	}
 	if isCustomLog {
-		if err := validateProxiedServerLogPath(logPath); err != nil {
-			return nil, fmt.Errorf("newProxiedServerUOWProvider: proxied server log (from env or %s): %w", configfile.ProxiedServerClientInfoFileName, err)
+		validateLogDone := latSpan("provider:validateLogPath")
+		logPathErr := validateProxiedServerLogPath(logPath)
+		validateLogDone()
+		if logPathErr != nil {
+			return nil, fmt.Errorf("newProxiedServerUOWProvider: proxied server log (from env or %s): %w", configfile.ProxiedServerClientInfoFileName, logPathErr)
 		}
 	}
 
+	defer latSpan("provider:NewDoltServerUOWProvider")()
 	return uow.NewDoltServerUOWProvider(
 		ctx,
 		rootPath,

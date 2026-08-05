@@ -10,6 +10,8 @@ import (
 	"strings"
 	"sync/atomic"
 	"time"
+
+	"github.com/steveyegge/beads/internal/latency"
 )
 
 const (
@@ -182,16 +184,24 @@ func MigrateUpWithLock(ctx context.Context, conn *sql.Conn, databaseName string,
 	}
 
 	lockName := MigrationLockName(databaseName)
-	if err := AcquireMigrationLock(ctx, conn, lockName); err != nil {
-		return 0, err
+	acquireDone := latency.Span("migrate:AcquireMigrationLock")
+	acquireErr := AcquireMigrationLock(ctx, conn, lockName)
+	acquireDone()
+	if acquireErr != nil {
+		return 0, acquireErr
 	}
 	defer func() {
-		if releaseErr := ReleaseMigrationLock(conn, lockName); releaseErr != nil {
+		releaseDone := latency.Span("migrate:ReleaseMigrationLock")
+		releaseErr := ReleaseMigrationLock(conn, lockName)
+		releaseDone()
+		if releaseErr != nil {
 			err = errors.Join(err, releaseErr)
 		}
 	}()
 	if o.lockedPreparation != nil && o.lockedPreparation.fn != nil {
+		prepDone := latency.Span("migrate:lockedPreparation")
 		capability, preparationErr := o.lockedPreparation.fn(ctx, conn)
+		prepDone()
 		if preparationErr != nil {
 			return 0, preparationErr
 		}
@@ -203,7 +213,9 @@ func MigrateUpWithLock(ctx context.Context, conn *sql.Conn, databaseName string,
 		}
 	}
 
+	migrateDone := latency.Span("migrate:MigrateUp")
 	applied, err = MigrateUp(ctx, conn)
+	migrateDone()
 	var dirtyErr *DirtyTablesError
 	if err != nil && o.freshBootstrapHeal != nil && errors.As(err, &dirtyErr) {
 		// Authorization is checked after the dirty guard fires and while the

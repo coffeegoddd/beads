@@ -19,6 +19,7 @@ import (
 	"github.com/steveyegge/beads/internal/configfile"
 	"github.com/steveyegge/beads/internal/debug"
 	"github.com/steveyegge/beads/internal/fdhygiene"
+	"github.com/steveyegge/beads/internal/latency"
 	"github.com/steveyegge/beads/internal/lockfile"
 	"github.com/steveyegge/beads/internal/procid"
 	"github.com/steveyegge/beads/internal/storage/dbproxy/identity"
@@ -208,7 +209,9 @@ func GetCreateDatabaseProxyServerEndpoint(rootDir string, opts OpenOpts) (Endpoi
 			return Endpoint{}, fmt.Errorf("OpenOpts.External: %w", err)
 		}
 	}
+	epochDone := latency.Span("proxy:readStopEpoch")
 	stopEpoch, err := readStopEpoch(rootDir)
+	epochDone()
 	if err != nil {
 		return Endpoint{}, fmt.Errorf("read proxy stop epoch: %w", err)
 	}
@@ -222,8 +225,14 @@ func GetCreateDatabaseProxyServerEndpoint(rootDir string, opts OpenOpts) (Endpoi
 	want := intendedUpstreamID(opts)
 
 	var lastSpawnErr error
+	attempt := 0
 	for {
+		attempt++
+		suffix := fmt.Sprintf("#%d", attempt)
+
+		discoverDone := latency.Span("proxy:readAndDial" + suffix)
 		discovery := readAndDial(rootDir)
+		discoverDone()
 		switch discovery.status {
 		case adoptionAdopted:
 			return adoptedEndpoint(rootDir, want, discovery)
@@ -231,12 +240,16 @@ func GetCreateDatabaseProxyServerEndpoint(rootDir string, opts OpenOpts) (Endpoi
 			return Endpoint{}, fmt.Errorf("discover proxy from %s: %w", pidfile.Path(rootDir, PIDFileName), discovery.err)
 		}
 
+		lockDone := latency.Span("proxy:TryLock" + suffix)
 		lock, err := util.TryLock(filepath.Join(rootDir, LockFileName))
+		lockDone()
 		switch {
 		case err == nil:
 			// Re-read under proxy.lock. Another opener may have replaced the
 			// record after our lock-free discovery.
+			relockedDone := latency.Span("proxy:readAndDial(locked)" + suffix)
 			discovery = readAndDial(rootDir)
+			relockedDone()
 			if discovery.status == adoptionAdopted {
 				lock.Unlock()
 				return adoptedEndpoint(rootDir, want, discovery)
@@ -246,7 +259,9 @@ func GetCreateDatabaseProxyServerEndpoint(rootDir string, opts OpenOpts) (Endpoi
 				return Endpoint{}, fmt.Errorf("discover proxy from %s under lock: %w", pidfile.Path(rootDir, PIDFileName), discovery.err)
 			}
 
+			markerDone := latency.Span("proxy:inspectSpawnMarker" + suffix)
 			markerActive, markerErr := inspectSpawnMarkerLocked(rootDir)
+			markerDone()
 			if markerErr != nil {
 				lock.Unlock()
 				return Endpoint{}, markerErr
@@ -260,7 +275,9 @@ func GetCreateDatabaseProxyServerEndpoint(rootDir string, opts OpenOpts) (Endpoi
 			}
 
 			var ep Endpoint
+			spawnDone := latency.Span("proxy:spawnAndHandoff" + suffix)
 			ep, lastSpawnErr = spawnAndHandoff(rootDir, opts, deadline, stopEpoch, lock, discovery)
+			spawnDone()
 			if lastSpawnErr == nil {
 				return ep, nil
 			}
@@ -325,15 +342,23 @@ func spawnAndHandoff(
 		return Endpoint{}, fmt.Errorf("%w for %s", errStartInterrupted, rootDir)
 	}
 
-	if err := quarantineForSpawn(rootDir, discovery); err != nil {
-		return Endpoint{}, err
+	quarantineDone := latency.Span("spawn:quarantineForSpawn")
+	quarantineErr := quarantineForSpawn(rootDir, discovery)
+	quarantineDone()
+	if quarantineErr != nil {
+		return Endpoint{}, quarantineErr
 	}
-	if err := cleanupOrphanBackend(rootDir); err != nil {
-		return Endpoint{}, err
+	cleanupDone := latency.Span("spawn:cleanupOrphanBackend")
+	cleanupErr := cleanupOrphanBackend(rootDir)
+	cleanupDone()
+	if cleanupErr != nil {
+		return Endpoint{}, cleanupErr
 	}
 
 	handedOff = true
+	forkDone := latency.Span("spawn:forkExecChild")
 	child, err := forkExecChild(rootDir, opts, opts.Port, stopEpoch, lock)
+	forkDone()
 	if err != nil {
 		return Endpoint{}, fmt.Errorf("fork child: %w", err)
 	}
@@ -349,9 +374,11 @@ func spawnAndHandoff(
 	poll := time.NewTicker(openPollInterval)
 	defer poll.Stop()
 
+	readyWait := latency.Span("spawn:waitForChildReady")
 	for {
 		discovered := readAndDial(rootDir)
 		if discovered.status == adoptionAdopted {
+			readyWait()
 			if err := sweepOldQuarantines(rootDir, time.Now()); err != nil {
 				log.Printf("dbproxy: could not sweep old quarantined records in %s: %v", rootDir, err)
 			}
@@ -569,7 +596,9 @@ func IsRunning(rootDir string) (bool, int) {
 }
 
 func readAndDial(rootDir string) adoptionResult {
+	pidfileDone := latency.Span("proxy:pidfile.Read")
 	pf, err := pidfile.Read(rootDir, PIDFileName)
+	pidfileDone()
 	if err != nil {
 		if isMalformedPIDFileError(err) {
 			return adoptionResult{status: adoptionMalformed, err: err}
@@ -586,7 +615,9 @@ func readAndDial(rootDir string) adoptionResult {
 		return adoptionResult{status: adoptionMalformed, pidfile: pf, err: err}
 	}
 
+	verifyDone := latency.Span("proxy:verifyProcessIdentity")
 	matched, err := verifyProcessIdentity(pf.Pid, procid.Token(pf.Birth))
+	verifyDone()
 	if err != nil {
 		// Discovery must not turn an identity-probe failure into a fatal
 		// pidfile I/O error. In particular, Windows ERROR_ACCESS_DENIED on a
@@ -602,15 +633,21 @@ func readAndDial(rootDir string) adoptionResult {
 		return adoptionResult{status: adoptionStaleDead, pidfile: pf}
 	}
 
+	rootIDDone := latency.Span("proxy:resolveRootIdentity")
 	expectedRootID, err := resolveRootIdentity(rootDir)
+	rootIDDone()
 	if err != nil {
 		return adoptionResult{status: adoptionUnverifiable, pidfile: pf, err: err}
 	}
+	secretDone := latency.Span("proxy:readControlSecret")
 	secret, err := readControlSecret(rootDir)
+	secretDone()
 	if err != nil {
 		return adoptionResult{status: adoptionUnverifiable, pidfile: pf, err: err}
 	}
+	identifyDone := latency.Span("proxy:identity.Identify")
 	reply, err := identity.Identify("127.0.0.1", pf.ControlPort, secret, identityProbeTimeout)
+	identifyDone()
 	if err != nil {
 		return adoptionResult{status: adoptionIdentityMismatch, pidfile: pf, err: err}
 	}
@@ -633,7 +670,10 @@ func readAndDial(rootDir string) adoptionResult {
 	}
 
 	ep := Endpoint{Host: "127.0.0.1", Port: pf.Port}
-	if !probePort(ep, identityProbeTimeout) {
+	probeDone := latency.Span("proxy:probePort")
+	reachable := probePort(ep, identityProbeTimeout)
+	probeDone()
+	if !reachable {
 		return adoptionResult{
 			status:  adoptionIdentityMismatch,
 			pidfile: pf,

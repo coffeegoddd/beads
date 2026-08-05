@@ -6,6 +6,8 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+
+	"github.com/steveyegge/beads/internal/latency"
 )
 
 // MinDoltVersionForArchiveLevelConfig is the earliest Dolt release known to
@@ -64,7 +66,9 @@ func SupportsArchiveLevelConfig(doltBin string) bool {
 		}
 	}
 
+	versionDone := latency.Span("doltserver:exec(dolt version)")
 	out, err := exec.Command(doltBin, "version").Output() //nolint:gosec // G204: doltBin is caller-resolved (PATH lookup or config), not user-request input
+	versionDone()
 	supported := err == nil && doltVersionAtLeast(string(out), MinDoltVersionForArchiveLevelConfig)
 
 	if hasKey {

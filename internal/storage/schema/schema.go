@@ -19,6 +19,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/steveyegge/beads/internal/latency"
 	"github.com/steveyegge/beads/internal/storage/dberrors"
 	"golang.org/x/term"
 )
@@ -467,12 +468,16 @@ func MigrateUp(ctx context.Context, db DBConn) (int, error) {
 	// whose migration cursors arrived at-latest without executing the seeding
 	// migrations (out-of-band table copy) reports no work needed and
 	// would otherwise never be healed.
+	seedDone := latency.Span("migrate:seedDoltIgnorePatterns")
 	seedChanged, err := seedDoltIgnorePatterns(ctx, db)
+	seedDone()
 	if err != nil {
 		return 0, err
 	}
 
+	neededDone := latency.Span("migrate:migrationWorkNeeded")
 	needed, err := migrationWorkNeeded(ctx, db)
+	neededDone()
 	if err != nil {
 		return 0, fmt.Errorf("checking schema migration work: %w", err)
 	}
