@@ -230,7 +230,10 @@ var configSetCmd = &cobra.Command{
 			}
 		}
 
-		if err := store.SetConfig(ctx, key, value); err != nil {
+		setDone := latSpan("store:SetConfig(" + key + ")")
+		err := store.SetConfig(ctx, key, value)
+		setDone()
+		if err != nil {
 			return HandleError("setting config: %v", err)
 		}
 		commandDidWrite.Store(true)
@@ -353,7 +356,9 @@ var configGetCmd = &cobra.Command{
 		var value string
 		var err error
 
+		getDone := latSpan("store:GetConfig(" + key + ")")
 		value, err = store.GetConfig(ctx, key)
+		getDone()
 
 		if err != nil {
 			return HandleError("getting config: %v", err)
@@ -436,7 +441,9 @@ var configListCmd = &cobra.Command{
 		}
 
 		ctx := rootCtx
+		allDone := latSpan("store:GetAllConfig")
 		config, err := store.GetAllConfig(ctx)
+		allDone()
 		if err != nil {
 			return HandleError("listing config: %v", err)
 		}
@@ -609,7 +616,10 @@ var configUnsetCmd = &cobra.Command{
 		}
 
 		ctx := rootCtx
-		if err := store.DeleteConfig(ctx, key); err != nil {
+		deleteDone := latSpan("store:DeleteConfig(" + key + ")")
+		err := store.DeleteConfig(ctx, key)
+		deleteDone()
+		if err != nil {
 			return HandleError("deleting config: %v", err)
 		}
 		commandDidWrite.Store(true)
@@ -894,7 +904,10 @@ Examples:
 
 				ctx := rootCtx
 				for _, p := range dbPairs {
-					if err := store.SetConfig(ctx, p.key, p.value); err != nil {
+					setDone := latSpan("store:SetConfig(" + p.key + ")")
+					err := store.SetConfig(ctx, p.key, p.value)
+					setDone()
+					if err != nil {
 						return HandleError("setting config %s: %v", p.key, err)
 					}
 				}

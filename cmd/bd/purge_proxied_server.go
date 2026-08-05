@@ -50,6 +50,7 @@ func runPurgeOrPruneProxied(cmd *cobra.Command, scope purgeScope) error {
 	}
 	ctx := rootCtx
 
+	txDone := latSpan("uow:RunTx(purge)")
 	res, err := uow.RunTxResult(ctx, uowProvider, func(ctx context.Context, uw uow.UnitOfWork) (purgeProxiedTxResult, string, error) {
 		var result purgeProxiedTxResult
 
@@ -71,7 +72,9 @@ func runPurgeOrPruneProxied(cmd *cobra.Command, scope purgeScope) error {
 			filter.ClosedBefore = cutoff
 		}
 
+		searchDone := latSpan("uow:SearchIssues(closed)")
 		page, err := uw.IssueUseCase().SearchIssues(ctx, "", filter)
+		searchDone()
 		if err != nil {
 			return result, "", fmt.Errorf("listing issues: %w", err)
 		}
@@ -95,7 +98,9 @@ func runPurgeOrPruneProxied(cmd *cobra.Command, scope purgeScope) error {
 			for _, iss := range closedIssues {
 				candidateIDs[iss.ID] = true
 			}
+			refScanDone := latSpan("purge:buildReferencedSet")
 			refSet, err := buildReferencedSetProxied(ctx, uw, candidateIDs)
+			refScanDone()
 			if err != nil {
 				return result, "", fmt.Errorf("scanning open beads for references: %w", err)
 			}
@@ -125,10 +130,12 @@ func runPurgeOrPruneProxied(cmd *cobra.Command, scope purgeScope) error {
 
 		if dryRun {
 			result.dryRun = true
+			previewDone := latSpan("uow:DeleteIssues(dry-run)")
 			result.deleteResult, result.deleteErr = uw.IssueUseCase().DeleteIssues(ctx, domain.DeleteIssuesParams{
 				IDs:    result.issueIDs,
 				DryRun: true,
 			}, actor)
+			previewDone()
 			return result, "", nil
 		}
 
@@ -137,9 +144,11 @@ func runPurgeOrPruneProxied(cmd *cobra.Command, scope purgeScope) error {
 			return result, "", nil
 		}
 
+		deleteDone := latSpan("uow:DeleteIssues")
 		deleteResult, err := uw.IssueUseCase().DeleteIssues(ctx, domain.DeleteIssuesParams{
 			IDs: result.issueIDs,
 		}, actor)
+		deleteDone()
 		if err != nil {
 			return result, "", fmt.Errorf("%s failed: %w", scope.cmdName, err)
 		}
@@ -147,6 +156,7 @@ func runPurgeOrPruneProxied(cmd *cobra.Command, scope purgeScope) error {
 
 		return result, fmt.Sprintf("bd: %s %d bead(s)", scope.cmdName, deleteResult.DeletedCount), nil
 	})
+	txDone()
 	if err != nil {
 		return HandleErrorRespectJSON("%v", err)
 	}
@@ -179,7 +189,9 @@ func buildReferencedSetProxied(ctx context.Context, uw uow.UnitOfWork, candidate
 		types.StatusPinned,
 		types.StatusHooked,
 	}
+	statusesDone := latSpan("uow:GetCustomStatuses")
 	customStatuses, err := uw.ConfigUseCase().GetCustomStatuses(ctx)
+	statusesDone()
 	if err != nil {
 		return nil, fmt.Errorf("reading custom statuses for reference scan: %w", err)
 	}
@@ -189,7 +201,9 @@ func buildReferencedSetProxied(ctx context.Context, uw uow.UnitOfWork, candidate
 		}
 	}
 	notClosed := types.IssueFilter{Statuses: notClosedStatuses}
+	searchDone := latSpan("uow:SearchIssues(not-closed)")
 	page, err := uw.IssueUseCase().SearchIssues(ctx, "", notClosed)
+	searchDone()
 	if err != nil {
 		return nil, err
 	}
@@ -199,7 +213,9 @@ func buildReferencedSetProxied(ctx context.Context, uw uow.UnitOfWork, candidate
 	for i, iss := range openBeads {
 		openIDs[i] = iss.ID
 	}
+	commentsDone := latSpan("uow:GetCommentsForIssues")
 	commentsByIssue, err := uw.CommentUseCase().GetCommentsForIssues(ctx, openIDs)
+	commentsDone()
 	if err != nil {
 		return nil, err
 	}

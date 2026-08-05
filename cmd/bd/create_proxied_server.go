@@ -98,8 +98,11 @@ func runCreateProxiedSingle(_ *cobra.Command, ctx context.Context, in createInpu
 
 	issue := buildCreateIssueFromInput(in)
 
+	txDone := latSpan("uow:RunTx(create)")
 	res, err := uow.RunTxResult(ctx, uowProvider, func(ctx context.Context, uw uow.UnitOfWork) (*types.Issue, string, error) {
+		cctxDone := latSpan("uow:LoadCreateContext")
 		cctx, err := uw.ConfigUseCase().LoadCreateContext(ctx)
+		cctxDone()
 		if err != nil {
 			return nil, "", fmt.Errorf("load create context: %w", err)
 		}
@@ -157,17 +160,20 @@ func runCreateProxiedSingle(_ *cobra.Command, ctx context.Context, in createInpu
 
 		var result domain.CreateIssueResult
 		var createErr error
+		createDone := latSpan("uow:CreateIssue")
 		if issue.Ephemeral || issue.NoHistory {
 			result, createErr = uw.IssueUseCase().CreateWisp(ctx, params, in.createdBy)
 		} else {
 			result, createErr = uw.IssueUseCase().CreateIssue(ctx, params, in.createdBy)
 		}
+		createDone()
 		if createErr != nil {
 			return nil, "", createErr
 		}
 
 		return result.Issue, fmt.Sprintf("bd: create %s", result.Issue.ID), nil
 	})
+	txDone()
 	if err != nil {
 		// RULING R1: an occupied --id is a refusal, not a silent full-row
 		// upsert reported as success. Same message and exit code as the
@@ -180,7 +186,10 @@ func runCreateProxiedSingle(_ *cobra.Command, ctx context.Context, in createInpu
 
 	switch {
 	case in.jsonOutput:
-		if err := outputJSON(res); err != nil {
+		jsonDone := latSpan("create:outputJSON")
+		err := outputJSON(res)
+		jsonDone()
+		if err != nil {
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		}
 	case in.silent:
@@ -285,8 +294,11 @@ func runCreateProxiedMarkdown(_ *cobra.Command, ctx context.Context, in createIn
 		return HandleError("proxied-server UOW provider not initialized")
 	}
 
+	txDone := latSpan("uow:RunTx(create-batch)")
 	res, err := uow.RunTxResult(ctx, uowProvider, func(ctx context.Context, uw uow.UnitOfWork) ([]*types.Issue, string, error) {
+		cctxDone := latSpan("uow:LoadCreateContext")
 		cctx, err := uw.ConfigUseCase().LoadCreateContext(ctx)
+		cctxDone()
 		if err != nil {
 			return nil, "", fmt.Errorf("load create context: %w", err)
 		}
@@ -327,17 +339,20 @@ func runCreateProxiedMarkdown(_ *cobra.Command, ctx context.Context, in createIn
 
 		var result domain.CreateIssuesResult
 		var createErr error
+		createDone := latSpan(fmt.Sprintf("uow:CreateIssues(%d)", len(paramsList)))
 		if in.ephemeral || in.noHistory {
 			result, createErr = uw.IssueUseCase().CreateWisps(ctx, paramsList, in.createdBy)
 		} else {
 			result, createErr = uw.IssueUseCase().CreateIssues(ctx, paramsList, in.createdBy)
 		}
+		createDone()
 		if createErr != nil {
 			return nil, "", fmt.Errorf("creating issues from markdown: %w", createErr)
 		}
 
 		return result.Issues, fmt.Sprintf("bd: create %d issue(s) from %s", len(result.Issues), in.markdownFile), nil
 	})
+	txDone()
 	if err != nil {
 		return HandleError("%v", err)
 	}
@@ -440,8 +455,11 @@ func runCreateProxiedGraph(_ *cobra.Command, ctx context.Context, in createInput
 		commitMsg = fmt.Sprintf("bd: graph-apply %d nodes", len(plan.Nodes))
 	}
 
+	txDone := latSpan("uow:RunTx(graph-apply)")
 	res, err := uow.RunTxResult(ctx, uowProvider, func(ctx context.Context, uw uow.UnitOfWork) (map[string]string, string, error) {
+		cctxDone := latSpan("uow:LoadCreateContext")
 		cctx, err := uw.ConfigUseCase().LoadCreateContext(ctx)
+		cctxDone()
 		if err != nil {
 			return nil, "", fmt.Errorf("load create context: %w", err)
 		}
@@ -457,17 +475,20 @@ func runCreateProxiedGraph(_ *cobra.Command, ctx context.Context, in createInput
 
 		var result domain.GraphApplyResult
 		var applyErr error
+		applyDone := latSpan(fmt.Sprintf("uow:ApplyGraph(%d nodes)", len(plan.Nodes)))
 		if useWisp {
 			result, applyErr = uw.IssueUseCase().ApplyWispGraph(ctx, domainPlan, in.createdBy)
 		} else {
 			result, applyErr = uw.IssueUseCase().ApplyIssueGraph(ctx, domainPlan, in.createdBy)
 		}
+		applyDone()
 		if applyErr != nil {
 			return nil, "", fmt.Errorf("graph create: %w", applyErr)
 		}
 
 		return result.IDs, commitMsg, nil
 	})
+	txDone()
 	if err != nil {
 		return HandleError("%v", err)
 	}

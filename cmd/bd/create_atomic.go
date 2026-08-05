@@ -34,13 +34,16 @@ func (e createDepEdges) empty() bool {
 // keeps its store-specific routing and commit behavior.
 func createIssueWithDeps(ctx context.Context, st storage.DoltStorage, issue *types.Issue, actor string, edges createDepEdges) error {
 	if edges.empty() {
+		defer latSpan("store:CreateIssue")()
 		return st.CreateIssue(ctx, issue, actor)
 	}
 
 	// Normalize --deps targets to full IDs before any write (GH#5005). Fail
 	// closed if a target does not resolve — never store a bare slug that
 	// would become a dangling, list-invisible edge.
+	resolveDone := latSpan("store:resolveDepSpecTargets")
 	resolvedSpecs, err := resolveDepSpecTargets(ctx, st, edges.specs)
+	resolveDone()
 	if err != nil {
 		return err
 	}
@@ -62,8 +65,12 @@ func createIssueWithDeps(ctx context.Context, st storage.DoltStorage, issue *typ
 		commitMsg = "bd: create " + issue.ID
 	}
 
+	defer latSpan("store:transact(create)")()
 	return transactHonoringAutoCommit(ctx, st, commitMsg, func(tx storage.Transaction) error {
-		if err := tx.CreateIssue(ctx, issue, actor); err != nil {
+		createDone := latSpan("tx:CreateIssue")
+		err := tx.CreateIssue(ctx, issue, actor)
+		createDone()
+		if err != nil {
 			return err
 		}
 		// issue.ID is only reserved after tx.CreateIssue for auto-minted IDs, so
@@ -88,7 +95,10 @@ func addParentEdge(ctx context.Context, tx storage.Transaction, issueID, parentI
 		DependsOnID: parentID,
 		Type:        types.DepParentChild,
 	}
-	if err := tx.AddDependency(ctx, dep, actor); err != nil {
+	depDone := latSpan("tx:AddDependency(parent " + parentID + ")")
+	err := tx.AddDependency(ctx, dep, actor)
+	depDone()
+	if err != nil {
 		return fmt.Errorf("adding parent-child dependency %s -> %s: %w", issueID, parentID, err)
 	}
 	return nil
@@ -106,7 +116,10 @@ func addDepSpecEdges(ctx context.Context, tx storage.Transaction, issueID string
 		if spec.SwapDirection {
 			dep.IssueID, dep.DependsOnID = dep.DependsOnID, dep.IssueID
 		}
-		if err := tx.AddDependency(ctx, dep, actor); err != nil {
+		depDone := latSpan("tx:AddDependency(" + dep.IssueID + "→" + dep.DependsOnID + ")")
+		err := tx.AddDependency(ctx, dep, actor)
+		depDone()
+		if err != nil {
 			return fmt.Errorf("adding dependency %s -> %s: %w", dep.IssueID, dep.DependsOnID, err)
 		}
 	}
@@ -128,8 +141,11 @@ func addWaitsForEdge(ctx context.Context, tx storage.Transaction, issueID string
 		Type:        types.DepWaitsFor,
 		Metadata:    string(metaJSON),
 	}
+	depDone := latSpan("tx:AddDependency(waits-for " + waitsFor.SpawnerID + ")")
 	if err := tx.AddDependency(ctx, dep, actor); err != nil {
+		depDone()
 		return fmt.Errorf("adding waits-for dependency %s -> %s: %w", issueID, waitsFor.SpawnerID, err)
 	}
+	depDone()
 	return nil
 }

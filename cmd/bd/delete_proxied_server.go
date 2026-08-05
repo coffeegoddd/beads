@@ -63,10 +63,13 @@ func runDeleteProxiedServer(cmd *cobra.Command, ctx context.Context, args []stri
 		return runDeleteProxiedPreviewTx(ctx, in)
 	}
 
+	txDone := latSpan("uow:RunTx(delete)")
 	res, err := uow.RunTxResult(ctx, uowProvider, func(ctx context.Context, uw uow.UnitOfWork) (domain.DeleteIssuesResult, string, error) {
 		issueUC := uw.IssueUseCase()
 
+		previewDone := latSpan("uow:PreviewDelete")
 		preview, err := issueUC.PreviewDelete(ctx, in.ids)
+		previewDone()
 		if err != nil {
 			return domain.DeleteIssuesResult{}, "", fmt.Errorf("preview: %w", err)
 		}
@@ -74,11 +77,13 @@ func runDeleteProxiedServer(cmd *cobra.Command, ctx context.Context, args []stri
 			return domain.DeleteIssuesResult{}, "", fmt.Errorf("issues not found: %s", strings.Join(preview.NotFound, ", "))
 		}
 
+		deleteDone := latSpan("uow:DeleteIssues")
 		res, err := issueUC.DeleteIssues(ctx, domain.DeleteIssuesParams{
 			IDs:                  in.ids,
 			Cascade:              true,
 			UpdateTextReferences: true,
 		}, actor)
+		deleteDone()
 		if err != nil {
 			return domain.DeleteIssuesResult{}, "", fmt.Errorf("delete: %w", err)
 		}
@@ -88,11 +93,14 @@ func runDeleteProxiedServer(cmd *cobra.Command, ctx context.Context, args []stri
 
 		return res, fmt.Sprintf("bd: delete %d issue(s)", res.DeletedCount), nil
 	})
+	txDone()
 	if err != nil {
 		return HandleErrorRespectJSON("%v", err)
 	}
 
+	renderDone := latSpan("delete:render")
 	renderDeleteProxiedResult(in, res)
+	renderDone()
 	return nil
 }
 
@@ -102,10 +110,13 @@ type deletePreviewResult struct {
 }
 
 func runDeleteProxiedPreviewTx(ctx context.Context, in *deleteInput) error {
+	txDone := latSpan("uow:RunTxRead(delete-preview)")
 	result, err := uow.RunTxRead(ctx, uowProvider, func(ctx context.Context, uw uow.UnitOfWork) (deletePreviewResult, error) {
 		issueUC := uw.IssueUseCase()
 
+		previewDone := latSpan("uow:PreviewDelete")
 		preview, err := issueUC.PreviewDelete(ctx, in.ids)
+		previewDone()
 		if err != nil {
 			return deletePreviewResult{}, fmt.Errorf("preview: %w", err)
 		}
@@ -113,17 +124,20 @@ func runDeleteProxiedPreviewTx(ctx context.Context, in *deleteInput) error {
 			return deletePreviewResult{}, fmt.Errorf("issues not found: %s", strings.Join(preview.NotFound, ", "))
 		}
 
+		countsDone := latSpan("uow:DeleteIssues(dry-run)")
 		res, err := issueUC.DeleteIssues(ctx, domain.DeleteIssuesParams{
 			IDs:     in.ids,
 			Cascade: true,
 			DryRun:  true,
 		}, actor)
+		countsDone()
 		if err != nil {
 			return deletePreviewResult{}, fmt.Errorf("preview counts: %w", err)
 		}
 
 		return deletePreviewResult{preview: preview, res: res}, nil
 	})
+	txDone()
 	if err != nil {
 		return HandleErrorRespectJSON("%v", err)
 	}

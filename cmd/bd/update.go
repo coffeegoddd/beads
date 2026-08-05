@@ -117,7 +117,9 @@ pointless).`,
 			status, _ := cmd.Flags().GetString("status")
 			var customStatuses []string
 			if store != nil {
+				statusesDone := latSpan("store:GetCustomStatuses")
 				cs, err := store.GetCustomStatuses(rootCtx)
+				statusesDone()
 				if err != nil {
 					if !jsonOutput {
 						fmt.Fprintf(os.Stderr, "%s Failed to get custom statuses: %v\n", ui.RenderWarn("!"), err)
@@ -436,7 +438,9 @@ pointless).`,
 		}
 		for _, id := range args {
 			// Resolve and get issue with routing (e.g., gt-xyz routes to another rig)
+			resolveDone := latSpan("store:resolveAndGetIssueForMutation(" + id + ")")
 			result, err := resolveAndGetIssueForMutation(ctx, store, id)
+			resolveDone()
 			if err != nil {
 				if result != nil {
 					result.Close()
@@ -499,7 +503,9 @@ pointless).`,
 			}
 			notesOverwritten := replacesExistingNotes(issue.Notes, updates)
 
+			opsDone := latSpan("store:writeOps")
 			ops, err := writeOps(issueStore)
+			opsDone()
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "Error updating %s: %v\n", id, err)
 				recordFailure(id, fmt.Sprintf("updating issue: %v", err))
@@ -514,6 +520,7 @@ pointless).`,
 			// which is why it is conditioned here rather than passed straight
 			// through: `--force -s closed` is now a legitimate way to ask for
 			// the close-policy half alone.
+			updateDone := latSpan("store:Update(" + result.ResolvedID + ")")
 			updateResult, updateErr := runCommandUpdateMutation(opsCtx, ops, commandUpdateMutation{
 				actor:            actor,
 				issueID:          result.ResolvedID,
@@ -523,6 +530,7 @@ pointless).`,
 				expectedAssignee: ifAssignee,
 				expectedStatus:   expectedStatus,
 			})
+			updateDone()
 			if updateErr != nil {
 				fmt.Fprintf(os.Stderr, "Error updating %s: %v\n", id, updateErr)
 				failures = append(failures, updateIDFailure{
@@ -580,10 +588,13 @@ pointless).`,
 				if s == nil {
 					continue
 				}
-				if err := commitPendingIfEmbedded(ctx, s, actor, doltAutoCommitParams{
+				commitDone := latSpan("store:commitPendingIfEmbedded")
+				err := commitPendingIfEmbedded(ctx, s, actor, doltAutoCommitParams{
 					Command:  "update",
 					IssueIDs: ids,
-				}); err != nil {
+				})
+				commitDone()
+				if err != nil {
 					closePendingResults()
 					return HandleErrorRespectJSON("failed to commit: %v", err)
 				}
@@ -600,7 +611,10 @@ pointless).`,
 		}
 
 		if jsonOutput && len(updatedIssues) > 0 {
-			if jerr := outputJSON(updatedIssues); jerr != nil {
+			jsonDone := latSpan("update:outputJSON")
+			jerr := outputJSON(updatedIssues)
+			jsonDone()
+			if jerr != nil {
 				return jerr
 			}
 		}

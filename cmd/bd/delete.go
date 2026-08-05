@@ -89,7 +89,10 @@ Force: Delete and orphan dependents
 		}
 
 		if len(issueIDs) > 1 || cascade {
-			if err := deleteBatch(cmd, issueIDs, force, dryRun, cascade, jsonOutput, false); err != nil {
+			batchDone := latSpan("delete:deleteBatch")
+			err := deleteBatch(cmd, issueIDs, force, dryRun, cascade, jsonOutput, false)
+			batchDone()
+			if err != nil {
 				if _, ok := exitCodeFromError(err); ok {
 					return err
 				}
@@ -101,7 +104,9 @@ Force: Delete and orphan dependents
 		issueID := issueIDs[0]
 		ctx := rootCtx
 		// Get the issue to be deleted, using prefix-based routing
+		resolveDone := latSpan("store:resolveAndGetIssueForMutation(" + issueID + ")")
 		routedResult, err := resolveAndGetIssueForMutation(ctx, store, issueID)
+		resolveDone()
 		if err != nil {
 			if isNotFoundErr(err) {
 				return HandleError("issue %s not found", issueID)
@@ -113,21 +118,27 @@ Force: Delete and orphan dependents
 		issueID = routedResult.ResolvedID
 		activeStore := routedResult.Store
 		connectedIssues := make(map[string]*types.Issue)
+		depsDone := latSpan("store:GetDependencies(" + issueID + ")")
 		deps, err := activeStore.GetDependencies(ctx, issueID)
+		depsDone()
 		if err != nil {
 			return HandleError("getting dependencies: %v", err)
 		}
 		for _, dep := range deps {
 			connectedIssues[dep.ID] = dep
 		}
+		dependentsDone := latSpan("store:GetDependents(" + issueID + ")")
 		dependents, err := activeStore.GetDependents(ctx, issueID)
+		dependentsDone()
 		if err != nil {
 			return HandleError("getting dependents: %v", err)
 		}
 		for _, dependent := range dependents {
 			connectedIssues[dependent.ID] = dependent
 		}
+		recordsDone := latSpan("store:GetDependencyRecords(" + issueID + ")")
 		depRecords, err := activeStore.GetDependencyRecords(ctx, issueID)
+		recordsDone()
 		if err != nil {
 			return HandleError("getting dependency records: %v", err)
 		}
@@ -139,7 +150,9 @@ Force: Delete and orphan dependents
 		if dryRun || !force {
 			var previewResult *types.DeleteIssuesResult
 			if dryRun {
+				previewDone := latSpan("store:DeleteIssues(preview)")
 				previewResult, err = activeStore.DeleteIssues(ctx, []string{issueID}, false, force, true)
+				previewDone()
 				if err != nil {
 					if previewErr := outputDeletionPreview([]string{issueID}, map[string]*types.Issue{issueID: issue}, false, true, previewResult, err, jsonOutput); previewErr != nil {
 						return previewErr
@@ -198,6 +211,7 @@ Force: Delete and orphan dependents
 		}
 		updatedIssueCount := 0
 		totalDepsRemoved := 0
+		txDone := latSpan("store:transact(delete " + issueID + ")")
 		deleteErr := transactHonoringAutoCommit(ctx, activeStore, fmt.Sprintf("bd: delete %s", issueID), func(tx storage.Transaction) error {
 			for id, connIssue := range connectedIssues {
 				updates := make(map[string]interface{})
@@ -214,29 +228,42 @@ Force: Delete and orphan dependents
 					updates["acceptance_criteria"] = re.ReplaceAllString(connIssue.AcceptanceCriteria, replacementText)
 				}
 				if len(updates) > 0 {
-					if err := tx.UpdateIssue(ctx, id, updates, actor); err != nil {
+					updateDone := latSpan("tx:UpdateIssue(" + id + ")")
+					err := tx.UpdateIssue(ctx, id, updates, actor)
+					updateDone()
+					if err != nil {
 						return fmt.Errorf("update references in %s: %w", id, err)
 					}
 					updatedIssueCount++
 				}
 			}
 			for _, dep := range depRecords {
-				if err := tx.RemoveDependency(ctx, dep.IssueID, dep.DependsOnID, actor); err != nil {
+				removeDone := latSpan("tx:RemoveDependency(" + dep.IssueID + "→" + dep.DependsOnID + ")")
+				err := tx.RemoveDependency(ctx, dep.IssueID, dep.DependsOnID, actor)
+				removeDone()
+				if err != nil {
 					return fmt.Errorf("remove dependency %s → %s: %w", dep.IssueID, dep.DependsOnID, err)
 				}
 				totalDepsRemoved++
 			}
 			for _, dep := range dependents {
-				if err := tx.RemoveDependency(ctx, dep.ID, issueID, actor); err != nil {
+				removeDone := latSpan("tx:RemoveDependency(" + dep.ID + "→" + issueID + ")")
+				err := tx.RemoveDependency(ctx, dep.ID, issueID, actor)
+				removeDone()
+				if err != nil {
 					return fmt.Errorf("remove dependency %s → %s: %w", dep.ID, issueID, err)
 				}
 				totalDepsRemoved++
 			}
-			if err := tx.DeleteIssue(ctx, issueID); err != nil {
+			deleteDone := latSpan("tx:DeleteIssue(" + issueID + ")")
+			err := tx.DeleteIssue(ctx, issueID)
+			deleteDone()
+			if err != nil {
 				return fmt.Errorf("delete %s: %w", issueID, err)
 			}
 			return nil
 		})
+		txDone()
 		if deleteErr != nil {
 			return HandleError("deleting issue: %v", deleteErr)
 		}
@@ -277,7 +304,9 @@ func deleteBatch(_ *cobra.Command, issueIDs []string, force bool, dryRun bool, c
 	notFound := []string{}
 	var routedStore storage.DoltStorage
 	for _, id := range issueIDs {
+		resolveDone := latSpan("store:resolveAndGetIssueForMutation(" + id + ")")
 		result, err := resolveAndGetIssueForMutation(ctx, store, id)
+		resolveDone()
 		if err != nil {
 			if isNotFoundErr(err) {
 				notFound = append(notFound, id)
@@ -304,7 +333,9 @@ func deleteBatch(_ *cobra.Command, issueIDs []string, force bool, dryRun bool, c
 		batchStore = routedStore
 	}
 	if dryRun || !force {
+		previewDone := latSpan("store:DeleteIssues(preview)")
 		result, err := batchStore.DeleteIssues(ctx, issueIDs, cascade, force, true)
+		previewDone()
 		if err != nil {
 			if previewErr := outputDeletionPreview(issueIDs, issues, cascade, dryRun, result, err, jsonOutput); previewErr != nil {
 				return previewErr
@@ -335,7 +366,9 @@ func deleteBatch(_ *cobra.Command, issueIDs []string, force bool, dryRun bool, c
 		idSet[id] = true
 	}
 	for _, id := range issueIDs {
+		depsDone := latSpan("store:GetDependencies(" + id + ")")
 		deps, err := batchStore.GetDependencies(ctx, id)
+		depsDone()
 		if err == nil {
 			for _, dep := range deps {
 				if !idSet[dep.ID] {
@@ -343,7 +376,9 @@ func deleteBatch(_ *cobra.Command, issueIDs []string, force bool, dryRun bool, c
 				}
 			}
 		}
+		dependentsDone := latSpan("store:GetDependents(" + id + ")")
 		dependents, err := batchStore.GetDependents(ctx, id)
+		dependentsDone()
 		if err == nil {
 			for _, dep := range dependents {
 				if !idSet[dep.ID] {
@@ -352,12 +387,16 @@ func deleteBatch(_ *cobra.Command, issueIDs []string, force bool, dryRun bool, c
 			}
 		}
 	}
+	deleteDone := latSpan("store:DeleteIssues")
 	result, err := batchStore.DeleteIssues(ctx, issueIDs, cascade, force, false)
+	deleteDone()
 	if err != nil {
 		return err
 	}
 
+	refsDone := latSpan("delete:updateTextReferences")
 	updatedCount := updateTextReferencesInIssues(ctx, issueIDs, connectedIssues)
+	refsDone()
 
 	commandDidWrite.Store(true)
 
@@ -464,7 +503,10 @@ func updateTextReferencesInIssues(ctx context.Context, deletedIDs []string, conn
 				updates["acceptance_criteria"] = re.ReplaceAllString(connIssue.AcceptanceCriteria, replacementText)
 			}
 			if len(updates) > 0 {
-				if err := store.UpdateIssue(ctx, connID, updates, actor); err == nil {
+				updateDone := latSpan("store:UpdateIssue(" + connID + ")")
+				err := store.UpdateIssue(ctx, connID, updates, actor)
+				updateDone()
+				if err == nil {
 					updatedCount++
 					// Update the in-memory issue to avoid double-replacing
 					if desc, ok := updates["description"].(string); ok {

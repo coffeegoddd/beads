@@ -118,7 +118,9 @@ func buildReferencedSet(ctx context.Context, st storage.DoltStorage, candidateID
 		types.StatusPinned,
 		types.StatusHooked,
 	}
+	statusesDone := latSpan("store:GetCustomStatusesDetailed")
 	customStatuses, err := st.GetCustomStatusesDetailed(ctx)
+	statusesDone()
 	if err != nil {
 		return nil, fmt.Errorf("reading custom statuses for reference scan: %w", err)
 	}
@@ -128,7 +130,9 @@ func buildReferencedSet(ctx context.Context, st storage.DoltStorage, candidateID
 		}
 	}
 	notClosed := types.IssueFilter{Statuses: notClosedStatuses}
+	searchDone := latSpan("store:SearchIssues(not-closed)")
 	openBeads, err := st.SearchIssues(ctx, "", notClosed)
+	searchDone()
 	if err != nil {
 		return nil, err
 	}
@@ -141,7 +145,9 @@ func buildReferencedSet(ctx context.Context, st storage.DoltStorage, candidateID
 	for _, iss := range openBeads {
 		scanText(iss.Description)
 		scanText(iss.Notes)
+		commentsDone := latSpan("store:GetIssueComments(" + iss.ID + ")")
 		comments, err := st.GetIssueComments(ctx, iss.ID)
+		commentsDone()
 		if err != nil {
 			return nil, err
 		}
@@ -260,7 +266,9 @@ func runPurgeOrPrune(cmd *cobra.Command, scope purgeScope) error {
 		filter.ClosedBefore = cutoff
 	}
 
+	searchDone := latSpan("store:SearchIssues(closed)")
 	closedIssues, err := store.SearchIssues(ctx, "", filter)
+	searchDone()
 	if err != nil {
 		return HandleErrorRespectJSON("listing issues: %v", err)
 	}
@@ -288,7 +296,9 @@ func runPurgeOrPrune(cmd *cobra.Command, scope purgeScope) error {
 		for _, iss := range closedIssues {
 			candidateIDs[iss.ID] = true
 		}
+		refScanDone := latSpan("purge:buildReferencedSet")
 		refSet, err := buildReferencedSet(ctx, store, candidateIDs)
+		refScanDone()
 		if err != nil {
 			return HandleErrorRespectJSON("scanning open beads for references: %v", err)
 		}
@@ -343,7 +353,9 @@ func runPurgeOrPrune(cmd *cobra.Command, scope purgeScope) error {
 	}
 
 	if dryRun {
+		previewDone := latSpan("store:DeleteIssues(dry-run)")
 		result, err := store.DeleteIssues(ctx, issueIDs, false, false, true)
+		previewDone()
 		if jsonOutput {
 			stats := map[string]interface{}{
 				"dry_run":            true,
@@ -418,7 +430,9 @@ func runPurgeOrPrune(cmd *cobra.Command, scope purgeScope) error {
 			fmt.Sprintf("Use --force to confirm or --dry-run to preview.\n  %s", hint))
 	}
 
+	deleteDone := latSpan("store:DeleteIssues")
 	result, err := store.DeleteIssues(ctx, issueIDs, false, true, false)
+	deleteDone()
 	if err != nil {
 		return HandleErrorRespectJSON("%s failed: %v", scope.cmdName, err)
 	}

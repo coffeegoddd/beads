@@ -81,7 +81,9 @@ the flags appear in the command line.`,
 		}
 
 		ctx := rootCtx
+		opsCtxDone := latSpan("close:issueOpsContext")
 		opsCtx, err := issueOpsContext(ctx)
+		opsCtxDone()
 		if err != nil {
 			return HandleErrorRespectJSON("%v", err)
 		}
@@ -94,7 +96,9 @@ the flags appear in the command line.`,
 			return HandleErrorRespectJSON("--suggest-next only works when closing a single issue")
 		}
 
+		resolveDone := latSpan("store:resolveCloseTargets")
 		results, cleanup, resolveErr := resolveCloseTargets(ctx, store, args)
+		resolveDone()
 		defer cleanup()
 		if resolveErr != nil {
 			return HandleErrorRespectJSON("%v", resolveErr)
@@ -124,9 +128,14 @@ the flags appear in the command line.`,
 		// inside that transaction, and the engine's own is_blocked guard runs
 		// there too (GH#962), so there is no read-then-write TOCTOU window
 		// between the check and the close.
+		preflightDone := latSpan("close:preflight")
 		plan := closeDirectPreflight(results, resolvedIDs, reasons, force)
+		preflightDone()
+
+		batchDone := latSpan("close:runBatches")
 		outcomes, claimedNext := closeDirectRun(opsCtx, closeDirectBatches(plan.items), len(resolvedIDs),
 			session, force, postCloseStore, closeClaimNextRequest(claimNext, continueFlag))
+		batchDone()
 
 		// Report and follow up on every argument, in the order it was typed.
 		closedIssues := []*types.Issue{}
@@ -185,7 +194,10 @@ the flags appear in the command line.`,
 				// suppressed real-close side effects (no audit, no closed→closed on the
 				// step). Register the store when it actually closed the root so the
 				// pending-commit sweep persists it — closedCount==0 would not commit.
-				if molID := autoCloseCompletedMolecule(ctx, activeStore, id, actor, session); molID != "" {
+				molDone := latSpan("store:autoCloseCompletedMolecule(" + id + ")")
+				molID := autoCloseCompletedMolecule(ctx, activeStore, id, actor, session)
+				molDone()
+				if molID != "" {
 					mutatedStores[activeStore] = append(mutatedStores[activeStore], molID)
 				}
 			} else {
@@ -202,7 +214,9 @@ the flags appear in the command line.`,
 
 				// Auto-close parent molecule if all steps are now complete.
 				// Runs against the same store the step was closed in.
+				molDone := latSpan("store:autoCloseCompletedMolecule(" + id + ")")
 				autoCloseCompletedMolecule(ctx, activeStore, id, actor, session)
+				molDone()
 			}
 
 			// First id this command settled as closed — a real close or an
@@ -254,7 +268,9 @@ the flags appear in the command line.`,
 		}
 
 		if suggestNext && len(resolvedIDs) == 1 && closedForCommand {
+			unblockedDone := latSpan("store:GetNewlyUnblockedByClose")
 			unblocked, err := postCloseStore.GetNewlyUnblockedByClose(ctx, resolvedIDs[0])
+			unblockedDone()
 			if err == nil && len(unblocked) > 0 {
 				if jsonOutput {
 					return outputJSON(map[string]interface{}{
@@ -271,7 +287,9 @@ the flags appear in the command line.`,
 
 		if continueFlag && len(resolvedIDs) == 1 && closedForCommand {
 			autoClaim := !noAuto
+			advanceDone := latSpan("store:AdvanceToNextStep")
 			result, err := AdvanceToNextStep(ctx, newStandaloneStoreMolWriter(postCloseStore), resolvedIDs[0], autoClaim, actor)
+			advanceDone()
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "Warning: could not advance to next step: %v\n", err)
 			} else if result != nil {
@@ -347,10 +365,13 @@ the flags appear in the command line.`,
 				if s == nil {
 					continue
 				}
-				if err := commitPendingIfEmbedded(ctx, s, actor, doltAutoCommitParams{
+				commitDone := latSpan("store:commitPendingIfEmbedded")
+				err := commitPendingIfEmbedded(ctx, s, actor, doltAutoCommitParams{
 					Command:  "close",
 					IssueIDs: ids,
-				}); err != nil {
+				})
+				commitDone()
+				if err != nil {
 					return HandleErrorRespectJSON("failed to commit: %v", err)
 				}
 			}

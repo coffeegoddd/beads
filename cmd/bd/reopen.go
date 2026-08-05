@@ -37,7 +37,9 @@ This is more explicit than 'bd update --status open' and emits a Reopened event.
 
 		reason, _ := cmd.Flags().GetString("reason")
 		ctx := rootCtx
+		opsCtxDone := latSpan("reopen:issueOpsContext")
 		opsCtx, err := issueOpsContext(ctx)
+		opsCtxDone()
 		if err != nil {
 			return HandleErrorRespectJSON("%v", err)
 		}
@@ -51,7 +53,9 @@ This is more explicit than 'bd update --status open' and emits a Reopened event.
 		}
 		for _, id := range args {
 			// Resolve with prefix routing (supports cross-rig reopens like `bd reopen xe-5ls`)
+			resolveDone := latSpan("store:resolveAndGetIssueForMutation(" + id + ")")
 			result, err := resolveAndGetIssueForMutation(ctx, store, id)
+			resolveDone()
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "Error resolving %s: %v\n", id, err)
 				hasError = true
@@ -66,13 +70,16 @@ This is more explicit than 'bd update --status open' and emits a Reopened event.
 				result.Close()
 				continue
 			}
+			opsDone := latSpan("store:writeOps")
 			ops, err := writeOps(issueStore)
+			opsDone()
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "Error reopening %s: %v\n", fullID, err)
 				hasError = true
 				result.Close()
 				continue
 			}
+			reopenDone := latSpan("store:Reopen(" + fullID + ")")
 			reopened, err := ops.Reopen(opsCtx, issueops.ReopenRequest{
 				Actor:   actor,
 				IssueID: fullID,
@@ -82,6 +89,7 @@ This is more explicit than 'bd update --status open' and emits a Reopened event.
 				// already writes "bd: reopen <ids>".
 				Provenance: "bd: reopen " + fullID,
 			})
+			reopenDone()
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "Error reopening %s: %v\n", fullID, err)
 				hasError = true
@@ -117,10 +125,13 @@ This is more explicit than 'bd update --status open' and emits a Reopened event.
 		}
 
 		for s, ids := range mutatedStores {
-			if err := commitPendingIfEmbedded(ctx, s, actor, doltAutoCommitParams{
+			commitDone := latSpan("store:commitPendingIfEmbedded")
+			err := commitPendingIfEmbedded(ctx, s, actor, doltAutoCommitParams{
 				Command:  "reopen",
 				IssueIDs: ids,
-			}); err != nil {
+			})
+			commitDone()
+			if err != nil {
 				for _, result := range pendingCloseResults {
 					result.Close()
 				}
@@ -132,7 +143,10 @@ This is more explicit than 'bd update --status open' and emits a Reopened event.
 		}
 
 		if jsonOutput && len(reopenedIssues) > 0 {
-			if jerr := outputJSON(reopenedIssues); jerr != nil {
+			jsonDone := latSpan("reopen:outputJSON")
+			jerr := outputJSON(reopenedIssues)
+			jsonDone()
+			if jerr != nil {
 				return jerr
 			}
 		}

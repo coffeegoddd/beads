@@ -164,7 +164,9 @@ func closeDirectRun(ctx context.Context, batches []closeDirectBatch, argCount in
 	var claimed *types.IssueWithCounts
 
 	for _, batch := range batches {
+		batchDone := latSpan(fmt.Sprintf("store:CloseBatch(%d ids)", len(batch.items)))
 		result, err := closeDirectCloseBatch(ctx, batch.store, closeDirectRequest(batch, session, force, claimStore, claimNext))
+		batchDone()
 		if err != nil {
 			for _, item := range batch.items {
 				refused := issueops.CloseOutcome{IssueID: item.id, Err: err}

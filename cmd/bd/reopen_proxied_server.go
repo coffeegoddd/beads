@@ -45,6 +45,7 @@ func runReopenProxiedServer(cmd *cobra.Command, ctx context.Context, args []stri
 		return HandleError("proxied-server UOW provider not initialized")
 	}
 
+	txDone := latSpan("uow:RunTx(reopen)")
 	res, err := uow.RunTxResult(ctx, uowProvider, func(ctx context.Context, uw uow.UnitOfWork) (reopenProxiedTxResult, string, error) {
 		var result reopenProxiedTxResult
 
@@ -65,6 +66,7 @@ func runReopenProxiedServer(cmd *cobra.Command, ctx context.Context, args []stri
 
 		return result, reopenProxiedCommitMessage(result.outcomes), nil
 	})
+	txDone()
 	if err != nil {
 		return HandleErrorRespectJSON("%v", err)
 	}
@@ -77,7 +79,10 @@ func runReopenProxiedServer(cmd *cobra.Command, ctx context.Context, args []stri
 		if o.reopened {
 			audit.LogFieldChange(o.id, "status", o.auditOld, string(types.StatusOpen), actor, o.auditReason)
 		}
-		if err := fireProxiedReopenHooks(ctx, o.after); err != nil {
+		hooksDone := latSpan("reopen:fireHooks(" + o.id + ")")
+		err := fireProxiedReopenHooks(ctx, o.after)
+		hooksDone()
+		if err != nil {
 			fmt.Fprintf(os.Stderr, "warning: %s: %v\n", o.id, err)
 		}
 		if !jsonOut {
@@ -104,7 +109,9 @@ func runReopenProxiedServer(cmd *cobra.Command, ctx context.Context, args []stri
 }
 
 func reopenProxiedOne(ctx context.Context, uw uow.UnitOfWork, id, reason string, errs *[]string) (reopenProxiedOutcome, bool) {
+	lookupDone := latSpan("uow:GetIssueOrWisp(" + id + ")")
 	current, isWisp, rerr := workapi.GetIssueOrWisp(ctx, workapi.NewUOWDetailSource(uw), id)
+	lookupDone()
 	if errors.Is(rerr, storage.ErrNotFound) {
 		*errs = append(*errs, fmt.Sprintf("Issue %s not found", id))
 		return reopenProxiedOutcome{}, false
@@ -123,11 +130,13 @@ func reopenProxiedOne(ctx context.Context, uw uow.UnitOfWork, id, reason string,
 		res domain.ReopenIssueResult
 		err error
 	)
+	reopenDone := latSpan("uow:Reopen(" + id + ")")
 	if isWisp {
 		res, err = uw.IssueUseCase().ReopenWisp(ctx, id, params, actor)
 	} else {
 		res, err = uw.IssueUseCase().ReopenIssue(ctx, id, params, actor)
 	}
+	reopenDone()
 	if err != nil {
 		*errs = append(*errs, fmt.Sprintf("Error reopening %s: %v", id, err))
 		return reopenProxiedOutcome{}, false

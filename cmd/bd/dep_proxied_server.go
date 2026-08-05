@@ -60,10 +60,14 @@ func proxiedIssueRelations() (issueops.Relations, error) {
 // prints warnings from. Only the bulk path trades the per-edge probe away, and
 // only because it always has.
 func addDependencyEdgesProxied(ctx context.Context, edges []issueops.DependencyEdge, skipPerEdgeCycleCheck bool) error {
+	editorDone := latSpan("uow:DependencyEditor")
 	editor, err := proxiedDependencyEditor()
+	editorDone()
 	if err != nil {
 		return err
 	}
+	addDone := latSpan(fmt.Sprintf("uow:AddDependencies(%d edges)", len(edges)))
+	defer addDone()
 	_, err = editor.AddDependencies(ctx, issueops.AddDependenciesRequest{
 		Actor:                 actor,
 		Edges:                 edges,
@@ -103,7 +107,9 @@ func depEdgeFeedback(ctx context.Context, fromID, toID string, checkCycles bool)
 		res.toTitle = proxiedLookupTitle(ctx, uw, toID)
 	}
 	if checkCycles {
+		cyclesDone := latSpan("uow:DetectCycles")
 		res.cycles, res.cycleErr = uw.DependencyUseCase().DetectCycles(ctx)
+		cyclesDone()
 	}
 	return res
 }
@@ -112,11 +118,15 @@ func proxiedLookupTitle(ctx context.Context, uw uow.UnitOfWork, id string) strin
 	if IsExternalRef(id) {
 		return ""
 	}
+	issueDone := latSpan("uow:GetIssue(" + id + ")")
 	issue, err := uw.IssueUseCase().GetIssue(ctx, id)
+	issueDone()
 	if err == nil && issue != nil {
 		return issue.Title
 	}
+	wispDone := latSpan("uow:GetWisp(" + id + ")")
 	wisp, err := uw.IssueUseCase().GetWisp(ctx, id)
+	wispDone()
 	if err == nil && wisp != nil {
 		return wisp.Title
 	}
@@ -321,18 +331,23 @@ func runDepRemoveProxiedServer(_ *cobra.Command, ctx context.Context, args []str
 		}
 	}
 
+	editorDone := latSpan("uow:DependencyEditor")
 	editor, err := proxiedDependencyEditor()
+	editorDone()
 	if err != nil {
 		return HandleErrorRespectJSON("%v", err)
 	}
 	// The role's Removed verdict is not printed. `bd dep remove` has always
 	// confirmed the same way whether or not an edge was there, and reporting
 	// the difference now would change what every existing script reads.
-	if _, err := editor.RemoveDependency(ctx, issueops.RemoveDependencyRequest{
+	removeDone := latSpan("uow:RemoveDependency")
+	_, err = editor.RemoveDependency(ctx, issueops.RemoveDependencyRequest{
 		Actor:       actor,
 		IssueID:     fromID,
 		DependsOnID: toID,
-	}); err != nil {
+	})
+	removeDone()
+	if err != nil {
 		return HandleErrorRespectJSON("%v", err)
 	}
 	res := depEdgeFeedback(ctx, fromID, toID, false)
@@ -385,7 +400,9 @@ func runDepListProxiedServer(cmd *cobra.Command, ctx context.Context, args []str
 	var allIssues []*issueops.RelatedIssue
 	for _, id := range args {
 		request.ID = id
+		relatedDone := latSpan("uow:Related(" + id + ")")
 		issues, err := rel.Related(ctx, request)
+		relatedDone()
 		if err != nil {
 			return HandleErrorRespectJSON("%v", err)
 		}
@@ -447,7 +464,9 @@ func runDepListRecordsProxiedServer(ctx context.Context, args []string, typeFilt
 	}
 	defer uw.Close(ctx)
 
+	recordsDone := latSpan("uow:GetIssueDependencyRecords")
 	depMap, err := uw.DependencyUseCase().GetIssueDependencyRecords(ctx, args)
+	recordsDone()
 	if err != nil {
 		return HandleErrorRespectJSON("%v", err)
 	}
@@ -517,19 +536,23 @@ func runDepTreeProxiedServer(cmd *cobra.Command, ctx context.Context, args []str
 	var tree []*types.TreeNode
 
 	if direction == "both" {
+		downDone := latSpan("uow:GetDependencyTree(down)")
 		downTree, err := depUC.GetDependencyTree(ctx, fullID, domain.DepTreeOpts{
 			MaxDepth:     maxDepth,
 			ShowAllPaths: showAllPaths,
 			Direction:    domain.DepDirectionOut,
 		})
+		downDone()
 		if err != nil {
 			return HandleErrorRespectJSON("%v", err)
 		}
+		upDone := latSpan("uow:GetDependencyTree(up)")
 		upTree, err := depUC.GetDependencyTree(ctx, fullID, domain.DepTreeOpts{
 			MaxDepth:     maxDepth,
 			ShowAllPaths: showAllPaths,
 			Direction:    domain.DepDirectionIn,
 		})
+		upDone()
 		if err != nil {
 			return HandleErrorRespectJSON("%v", err)
 		}
@@ -540,11 +563,13 @@ func runDepTreeProxiedServer(cmd *cobra.Command, ctx context.Context, args []str
 			treeDir = domain.DepDirectionIn
 		}
 		var err error
+		treeDone := latSpan("uow:GetDependencyTree")
 		tree, err = depUC.GetDependencyTree(ctx, fullID, domain.DepTreeOpts{
 			MaxDepth:     maxDepth,
 			ShowAllPaths: showAllPaths,
 			Direction:    treeDir,
 		})
+		treeDone()
 		if err != nil {
 			return HandleErrorRespectJSON("%v", err)
 		}
@@ -603,7 +628,9 @@ func runDepCyclesProxiedServer(_ *cobra.Command, ctx context.Context) error {
 	}
 	defer uw.Close(ctx)
 
+	cyclesDone := latSpan("uow:DetectCycles")
 	cycles, err := uw.DependencyUseCase().DetectCycles(ctx)
+	cyclesDone()
 	if err != nil {
 		return HandleErrorRespectJSON("%v", err)
 	}

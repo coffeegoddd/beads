@@ -104,10 +104,13 @@ func runCloseProxiedServer(cmd *cobra.Command, ctx context.Context, args []strin
 	// message did: a skipped id stays out of the log.
 	var result issueops.CloseBatchResult
 	if len(pre.items) > 0 {
+		closerDone := latSpan("uow:BatchCloser")
 		closer, cerr := proxiedBatchCloser()
+		closerDone()
 		if cerr != nil {
 			return HandleErrorRespectJSON("%v", cerr)
 		}
+		batchDone := latSpan(fmt.Sprintf("uow:CloseBatch(%d ids)", len(pre.items)))
 		result, err = closer.CloseBatch(ctx, issueops.CloseBatchRequest{
 			Actor:     actor,
 			Items:     pre.items,
@@ -115,13 +118,16 @@ func runCloseProxiedServer(cmd *cobra.Command, ctx context.Context, args []strin
 			Force:     in.force,
 			ClaimNext: closeClaimNextRequest(in.claimNext, in.continueOn),
 		})
+		batchDone()
 		if err != nil {
 			return HandleErrorRespectJSON("%v", err)
 		}
 	}
 
 	outcomes, closeReasons := closeProxiedOutcomes(&pre, result)
+	postDone := latSpan("close:postClose")
 	post := closeProxiedRunPostClose(ctx, args, in, outcomes)
+	postDone()
 
 	for _, e := range pre.errors {
 		if e != "" {
@@ -230,6 +236,8 @@ func closeProxiedRunPreflight(ctx context.Context, args, reasons []string, in cl
 		errors: make([]string, len(args)),
 		before: make(map[string]*types.Issue, len(args)),
 	}
+	preflightDone := latSpan("uow:RunTxRead(close-preflight)")
+	defer preflightDone()
 	_, err := uow.RunTxRead(ctx, uowProvider, func(ctx context.Context, uw uow.UnitOfWork) (struct{}, error) {
 		for i, id := range args {
 			refusal, current := closeProxiedCheckOne(ctx, uw, id, in)
@@ -249,7 +257,9 @@ func closeProxiedRunPreflight(ctx context.Context, args, reasons []string, in cl
 // closeProxiedCheckOne returns one id's refusal, or "" and the resolved
 // pre-close issue.
 func closeProxiedCheckOne(ctx context.Context, uw uow.UnitOfWork, id string, in closeProxiedInput) (string, *types.Issue) {
+	lookupDone := latSpan("uow:GetIssueOrWisp(" + id + ")")
 	current, _, err := workapi.GetIssueOrWisp(ctx, workapi.NewUOWDetailSource(uw), id)
+	lookupDone()
 	if errors.Is(err, storage.ErrNotFound) {
 		return fmt.Sprintf("Issue %s not found", id), nil
 	}
@@ -361,12 +371,16 @@ func closeProxiedRunPostClose(ctx context.Context, args []string, in closeProxie
 		return closeProxiedPostClose{}
 	}
 
+	txDone := latSpan("uow:RunTx(close-post)")
+	defer txDone()
 	post, err := uow.RunTxResult(ctx, uowProvider, func(ctx context.Context, uw uow.UnitOfWork) (closeProxiedPostClose, string, error) {
 		var out closeProxiedPostClose
 		var wrote []string
 
 		for _, o := range outcomes {
+			molDone := latSpan("uow:autoCloseCompletedMolecule(" + o.id + ")")
 			mol := autoCloseProxiedCompletedMolecule(ctx, uw, o.id, actor, in.session, &out.warnings)
+			molDone()
 			if mol != nil {
 				out.autoClosedMol = mol
 				wrote = append(wrote, "auto-close "+mol.ID)
@@ -374,7 +388,9 @@ func closeProxiedRunPostClose(ctx context.Context, args []string, in closeProxie
 		}
 
 		if in.suggestNext && len(args) == 1 {
+			suggestDone := latSpan("uow:GetNewlyUnblockedByClose")
 			unblocked, warn := closeProxiedSuggestNext(ctx, uw, args[0])
+			suggestDone()
 			out.unblocked = unblocked
 			if warn != "" {
 				out.warnings = append(out.warnings, warn)
@@ -382,7 +398,9 @@ func closeProxiedRunPostClose(ctx context.Context, args []string, in closeProxie
 		}
 
 		if in.continueOn && len(args) == 1 {
+			continueDone := latSpan("uow:AdvanceToNextStep")
 			cont, warn := closeProxiedContinue(ctx, uw, args[0], !in.noAuto)
+			continueDone()
 			out.continueResult = cont
 			if warn != "" {
 				out.warnings = append(out.warnings, warn)

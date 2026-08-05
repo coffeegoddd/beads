@@ -495,7 +495,9 @@ var createCmd = &cobra.Command{
 
 		createCtx := rootCtx
 		if parentID != "" {
+			childIDDone := latSpan("store:GetNextChildID(" + parentID + ")")
 			childID, err := store.GetNextChildID(rootCtx, parentID)
+			childIDDone()
 			if err != nil {
 				return HandleError("%v", err)
 			}
@@ -555,7 +557,9 @@ var createCmd = &cobra.Command{
 		// Resolve partial --deps targets the way `bd dep add` does, so a bare
 		// slug becomes a qualified id rather than a dangling edge, and an
 		// unknown target fails closed here instead of reaching the write.
+		resolveDone := latSpan("store:resolveDepSpecTargets")
 		resolvedDepSpecs, resolveErr := resolveDepSpecTargets(ctx, store, depSpecs)
+		resolveDone()
 		if resolveErr != nil {
 			return HandleErrorRespectJSON("%v", resolveErr)
 		}
@@ -566,24 +570,31 @@ var createCmd = &cobra.Command{
 		// (not the raw --deps strings) so this can't drift from parseDepSpec's
 		// normalization rules.
 		if dfParent := discoveredFromParentSpec(depSpecs); dfParent != "" {
+			parentDone := latSpan("store:GetIssue(" + dfParent + ")")
 			parentIssue, err := store.GetIssue(ctx, dfParent)
+			parentDone()
 			if err == nil && parentIssue.SourceRepo != "" {
 				issue.SourceRepo = parentIssue.SourceRepo
 			}
 			// If error getting parent or parent has no source_repo, continue with default
 		}
 
+		opsDone := latSpan("store:writeOps")
 		ops, err := writeOps(store)
+		opsDone()
 		if err != nil {
 			return HandleErrorRespectJSON("%v", err)
 		}
+		opsCtxDone := latSpan("create:issueOpsContext")
 		opsCtx, err := issueOpsContext(ctx)
+		opsCtxDone()
 		if err != nil {
 			return HandleErrorRespectJSON("%v", err)
 		}
 		// Label inheritance stays CLI-side (mergeCreateLabels above) because the
 		// dry-run preview needs it too; asking the facade to inherit as well
 		// would append the parent's labels a second time.
+		createDone := latSpan("store:Create")
 		result, err := ops.Create(opsCtx, issueops.CreateRequest{
 			Actor:         actor,
 			Issue:         issue,
@@ -592,6 +603,7 @@ var createCmd = &cobra.Command{
 			WaitsFor:      waitsForRequest(waitsForSpec),
 			ForceIDPrefix: forceCreate,
 		})
+		createDone()
 		if err != nil {
 			// RULING R1: an occupied --id is a refusal, not a silent full-row
 			// upsert reported as success.
@@ -619,29 +631,41 @@ var createCmd = &cobra.Command{
 			}
 			if shouldCommit {
 				commitMsg := fmt.Sprintf("bd: create %s", created.ID)
-				if err := store.Commit(ctx, commitMsg); err != nil && !isDoltNothingToCommit(err) {
+				commitDone := latSpan("store:Commit")
+				err := store.Commit(ctx, commitMsg)
+				commitDone()
+				if err != nil && !isDoltNothingToCommit(err) {
 					WarnError("failed to commit: %v", err)
 				}
 			}
 		}
 
 		if repoPath != "." && targetStore != nil {
-			if err := commitPendingIfEmbedded(ctx, targetStore, actor, doltAutoCommitParams{
+			commitDone := latSpan("store:commitPendingIfEmbedded")
+			err := commitPendingIfEmbedded(ctx, targetStore, actor, doltAutoCommitParams{
 				Command:  "create",
 				IssueIDs: []string{created.ID},
-			}); err != nil {
+			})
+			commitDone()
+			if err != nil {
 				debug.Logf("warning: failed to commit routed repo: %v", err)
 			}
 		}
 
 		if remoteCache != nil {
-			if pushErr := remoteCache.Push(rootCtx, repoPath); pushErr != nil {
+			pushDone := latSpan("create:remoteCache.Push")
+			pushErr := remoteCache.Push(rootCtx, repoPath)
+			pushDone()
+			if pushErr != nil {
 				return HandleError("failed to push to %s: %v\nThe issue was created locally but not synced to the remote.", repoPath, pushErr)
 			}
 		}
 
 		if jsonOutput {
-			if err := outputJSON(created); err != nil {
+			jsonDone := latSpan("create:outputJSON")
+			err := outputJSON(created)
+			jsonDone()
+			if err != nil {
 				return err
 			}
 		} else if silent {

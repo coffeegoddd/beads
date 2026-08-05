@@ -33,15 +33,19 @@ import (
 // for the reason the proxied twin states: only the bulk path trades the
 // per-edge probe away.
 func addDependencyEdgesDirect(ctx context.Context, st storage.DoltStorage, edges []issueops.DependencyEdge, skipPerEdgeCycleCheck bool) error {
+	editorDone := latSpan("store:DependencyEditor")
 	editor, err := st.DependencyEditor()
+	editorDone()
 	if err != nil {
 		return err
 	}
+	addDone := latSpan(fmt.Sprintf("store:AddDependencies(%d edges)", len(edges)))
 	_, err = editor.AddDependencies(ctx, issueops.AddDependenciesRequest{
 		Actor:                 actor,
 		Edges:                 edges,
 		SkipPerEdgeCycleCheck: skipPerEdgeCycleCheck,
 	})
+	addDone()
 	return err
 }
 
@@ -75,7 +79,9 @@ func exactDependencyTarget(ctx context.Context, st storage.DependencyQueryStore,
 // (e.g. dep add/remove/link writing through the source issue's store) must use
 // resolveIDForMutation instead (GH#3231, #4141).
 func resolveIDWithRouting(ctx context.Context, localStore storage.DoltStorage, id string) (resolvedID string, targetStore storage.DoltStorage, cleanup func(), err error) {
+	resolveDone := latSpan("store:resolveAndGetIssueWithRouting(" + id + ")")
 	result, err := resolveAndGetIssueWithRouting(ctx, localStore, id)
+	resolveDone()
 	if err != nil {
 		return "", nil, func() {}, fmt.Errorf("resolving issue ID %s: %w", id, err)
 	}
@@ -94,7 +100,9 @@ func resolveIDWithRouting(ctx context.Context, localStore storage.DoltStorage, i
 // can commit to the routed repository. Its result validation, local-store
 // fallback, and cleanup tail must stay aligned with resolveIDWithRouting.
 func resolveIDForMutation(ctx context.Context, localStore storage.DoltStorage, id string) (resolvedID string, targetStore storage.DoltStorage, cleanup func(), err error) {
+	resolveDone := latSpan("store:resolveAndGetIssueForMutation(" + id + ")")
 	result, err := resolveAndGetIssueForMutation(ctx, localStore, id)
+	resolveDone()
 	if err != nil {
 		return "", nil, func() {}, fmt.Errorf("resolving issue ID %s: %w", id, err)
 	}
@@ -148,7 +156,9 @@ func warnIfCyclesExist(s storage.DoltStorage) {
 	if s == nil {
 		return // Skip cycle check if store is not available
 	}
+	cyclesDone := latSpan("store:DetectCycles(warn)")
 	cycles, err := s.DetectCycles(rootCtx)
+	cyclesDone()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Warning: Failed to check for cycles: %v\n", err)
 		return
@@ -257,10 +267,13 @@ Examples:
 				warnIfCyclesExist(fromStore)
 			}
 
-			if err := commitPendingIfEmbedded(ctx, fromStore, actor, doltAutoCommitParams{
+			commitDone := latSpan("store:commitPendingIfEmbedded")
+			err = commitPendingIfEmbedded(ctx, fromStore, actor, doltAutoCommitParams{
 				Command:  "dep add",
 				IssueIDs: []string{fromID, toID},
-			}); err != nil {
+			})
+			commitDone()
+			if err != nil {
 				return HandleErrorRespectJSON("failed to commit: %v", err)
 			}
 
@@ -445,10 +458,13 @@ Examples:
 			warnIfCyclesExist(fromStore)
 		}
 
-		if err := commitPendingIfEmbedded(ctx, fromStore, actor, doltAutoCommitParams{
+		commitDone := latSpan("store:commitPendingIfEmbedded")
+		err = commitPendingIfEmbedded(ctx, fromStore, actor, doltAutoCommitParams{
 			Command:  "dep add",
 			IssueIDs: []string{fromID, toID},
-		}); err != nil {
+		})
+		commitDone()
+		if err != nil {
 			return HandleErrorRespectJSON("failed to commit: %v", err)
 		}
 
@@ -880,12 +896,16 @@ Examples:
 
 		var allIssues []*issueops.RelatedIssue
 		for _, r := range resolved {
+			relDone := latSpan("store:IssueRelations")
 			rel, err := r.store.IssueRelations()
+			relDone()
 			if err != nil {
 				return HandleErrorRespectJSON("%v", err)
 			}
 			request.ID = r.fullID
+			relatedDone := latSpan("store:Related(" + r.fullID + ")")
 			issues, err := rel.Related(ctx, request)
+			relatedDone()
 			if err != nil {
 				return HandleErrorRespectJSON("%v", err)
 			}
@@ -1008,26 +1028,36 @@ var depRemoveCmd = &cobra.Command{
 		// route gives: `bd dep remove` has always confirmed the same way whether
 		// or not an edge was there, and reporting the difference now would
 		// change what every existing script reads.
+		editorDone := latSpan("store:DependencyEditor")
 		editor, err := fromStore.DependencyEditor()
+		editorDone()
 		if err != nil {
 			return HandleErrorRespectJSON("%v", err)
 		}
+		opsCtxDone := latSpan("dep:issueOpsContext")
 		opsCtx, err := issueOpsContext(ctx)
+		opsCtxDone()
 		if err != nil {
 			return HandleErrorRespectJSON("%v", err)
 		}
-		if _, err := editor.RemoveDependency(opsCtx, issueops.RemoveDependencyRequest{
+		removeDone := latSpan("store:RemoveDependency")
+		_, err = editor.RemoveDependency(opsCtx, issueops.RemoveDependencyRequest{
 			Actor:       actor,
 			IssueID:     fullFromID,
 			DependsOnID: fullToID,
-		}); err != nil {
+		})
+		removeDone()
+		if err != nil {
 			return HandleErrorRespectJSON("%v", err)
 		}
 
-		if err := commitPendingIfEmbedded(ctx, fromStore, actor, doltAutoCommitParams{
+		commitDone := latSpan("store:commitPendingIfEmbedded")
+		err = commitPendingIfEmbedded(ctx, fromStore, actor, doltAutoCommitParams{
 			Command:  "dep remove",
 			IssueIDs: []string{fullFromID, fullToID},
-		}); err != nil {
+		})
+		commitDone()
+		if err != nil {
 			return HandleErrorRespectJSON("failed to commit: %v", err)
 		}
 
@@ -1118,19 +1148,25 @@ node count is checked afterward (post-hoc), not during the walk.`,
 		var tree []*types.TreeNode
 
 		if direction == "both" {
+			downDone := latSpan("store:GetDependencyTree(down)")
 			downTree, err := treeStore.GetDependencyTree(ctx, fullID, maxDepth, showAllPaths, false)
+			downDone()
 			if err != nil {
 				return HandleErrorRespectJSON("%v", err)
 			}
 
+			upDone := latSpan("store:GetDependencyTree(up)")
 			upTree, err := treeStore.GetDependencyTree(ctx, fullID, maxDepth, showAllPaths, true)
+			upDone()
 			if err != nil {
 				return HandleErrorRespectJSON("%v", err)
 			}
 
 			tree = mergeBidirectionalTrees(downTree, upTree, fullID)
 		} else {
+			treeDone := latSpan("store:GetDependencyTree")
 			tree, err = treeStore.GetDependencyTree(ctx, fullID, maxDepth, showAllPaths, direction == "up")
+			treeDone()
 			if err != nil {
 				return HandleErrorRespectJSON("%v", err)
 			}
@@ -1215,7 +1251,9 @@ var depCyclesCmd = &cobra.Command{
 		}
 
 		ctx := rootCtx
+		cyclesDone := latSpan("store:DetectCycles")
 		cycles, err := store.DetectCycles(ctx)
+		cyclesDone()
 		if err != nil {
 			return HandleErrorRespectJSON("%v", err)
 		}

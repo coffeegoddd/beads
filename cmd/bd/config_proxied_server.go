@@ -20,12 +20,17 @@ func runConfigSetProxiedServer(ctx context.Context, key, value string) error {
 		return HandleErrorRespectJSON("proxied-server UOW provider not initialized")
 	}
 
+	txDone := latSpan("uow:RunTx(config set)")
 	err := uow.RunTx(ctx, uowProvider, func(ctx context.Context, uw uow.UnitOfWork) (string, error) {
-		if err := uw.ConfigUseCase().SetConfig(ctx, key, value); err != nil {
+		setDone := latSpan("uow:SetConfig(" + key + ")")
+		err := uw.ConfigUseCase().SetConfig(ctx, key, value)
+		setDone()
+		if err != nil {
 			return "", fmt.Errorf("setting config: %w", err)
 		}
 		return fmt.Sprintf("bd: config set %s", key), nil
 	})
+	txDone()
 	if err != nil {
 		return HandleErrorRespectJSON("failed: %v", err)
 	}
@@ -47,9 +52,11 @@ func runConfigGetProxiedServer(ctx context.Context, key string) error {
 		return HandleErrorRespectJSON("proxied-server UOW provider not initialized")
 	}
 
+	getDone := latSpan("uow:GetConfig(" + key + ")")
 	value, err := uow.RunTxRead(ctx, uowProvider, func(ctx context.Context, uw uow.UnitOfWork) (string, error) {
 		return uw.ConfigUseCase().GetConfig(ctx, key)
 	})
+	getDone()
 	if err != nil {
 		return HandleErrorRespectJSON("Error getting config: %v", err)
 	}
@@ -74,9 +81,11 @@ func runConfigListProxiedServer(ctx context.Context) error {
 		return HandleErrorRespectJSON("proxied-server UOW provider not initialized")
 	}
 
+	allDone := latSpan("uow:GetAllConfig")
 	cfg, err := uow.RunTxRead(ctx, uowProvider, func(ctx context.Context, uw uow.UnitOfWork) (map[string]string, error) {
 		return uw.ConfigUseCase().GetAllConfig(ctx)
 	})
+	allDone()
 	if err != nil {
 		return HandleErrorRespectJSON("Error listing config: %v", err)
 	}
@@ -111,12 +120,17 @@ func runConfigUnsetProxiedServer(ctx context.Context, key string) error {
 		return HandleErrorRespectJSON("proxied-server UOW provider not initialized")
 	}
 
+	txDone := latSpan("uow:RunTx(config unset)")
 	err := uow.RunTx(ctx, uowProvider, func(ctx context.Context, uw uow.UnitOfWork) (string, error) {
-		if err := uw.ConfigUseCase().DeleteConfig(ctx, key); err != nil {
+		deleteDone := latSpan("uow:DeleteConfig(" + key + ")")
+		err := uw.ConfigUseCase().DeleteConfig(ctx, key)
+		deleteDone()
+		if err != nil {
 			return "", fmt.Errorf("deleting config: %w", err)
 		}
 		return fmt.Sprintf("bd: config unset %s", key), nil
 	})
+	txDone()
 	if err != nil {
 		return HandleErrorRespectJSON("failed: %v", err)
 	}
@@ -141,10 +155,15 @@ func runConfigSetManyProxiedServer(ctx context.Context, keys, values []string) e
 		return HandleErrorRespectJSON("proxied-server UOW provider not initialized")
 	}
 
+	txDone := latSpan("uow:RunTx(config set-many)")
+	defer txDone()
 	return uow.RunTx(ctx, uowProvider, func(ctx context.Context, uw uow.UnitOfWork) (string, error) {
 		cfgUC := uw.ConfigUseCase()
 		for i, k := range keys {
-			if err := cfgUC.SetConfig(ctx, k, values[i]); err != nil {
+			setDone := latSpan("uow:SetConfig(" + k + ")")
+			err := cfgUC.SetConfig(ctx, k, values[i])
+			setDone()
+			if err != nil {
 				return "", fmt.Errorf("setting config %s: %w", k, err)
 			}
 		}

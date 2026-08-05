@@ -238,7 +238,9 @@ func collectMetadataEntries() []configEntry {
 		return nil
 	}
 
+	loadDone := latSpan("config:configfile.Load")
 	cfg, err := configfile.Load(beadsDir)
+	loadDone()
 	if err != nil || cfg == nil {
 		return nil
 	}
@@ -289,7 +291,9 @@ func collectDatabaseEntries() []configEntry {
 	}
 
 	ctx := getRootContext()
+	allDone := latSpan("store:GetAllConfig")
 	dbConfig, err := s.GetAllConfig(ctx)
+	allDone()
 	if err != nil {
 		return nil
 	}

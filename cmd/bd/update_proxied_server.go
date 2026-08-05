@@ -69,7 +69,9 @@ func runUpdateProxiedServer(cmd *cobra.Command, ctx context.Context, args []stri
 	}
 
 	if jsonOut && len(updated) > 0 {
+		jsonDone := latSpan("update:outputJSON")
 		_ = outputJSON(updated)
+		jsonDone()
 	}
 	if len(failures) > 0 {
 		return reportUpdateFailures(failures, len(args))
@@ -145,10 +147,12 @@ func applyUpdateProxiedOne(ctx context.Context, id string, in *updateInput) (*ty
 	}
 
 	provider := &uowStageProvider{UnitOfWorkProvider: uowProvider}
+	txDone := latSpan("uow:RunTx(update " + id + ")")
 	attempt, err := uow.RunTxResultWithin(ctx, provider, proxiedUpdateRetryMaxElapsed,
 		func(ctx context.Context, uw uow.UnitOfWork) (proxiedUpdateAttempt, string, error) {
 			return applyUpdateProxiedAttempt(ctx, uw, id, in)
 		})
+	txDone()
 	if err != nil {
 		// The retry loop hands back the error a stage returned, unchanged
 		// (backoff unwraps its Permanent envelope), so the errors recorded by
@@ -194,7 +198,10 @@ func applyUpdateProxiedOne(ctx context.Context, id string, in *updateInput) (*ty
 	if attempt.notesOverwritten {
 		warnNotesReplacement(id)
 	}
-	if err := fireProxiedUpdateHooks(ctx, attempt.before, attempt.issue); err != nil {
+	hooksDone := latSpan("update:fireHooks(" + id + ")")
+	err = fireProxiedUpdateHooks(ctx, attempt.before, attempt.issue)
+	hooksDone()
+	if err != nil {
 		fmt.Fprintf(os.Stderr, "warning: %s: %v\n", id, err)
 	}
 	return attempt.issue, nil, nil
@@ -241,7 +248,9 @@ func applyClaimProxiedOne(ctx context.Context, id string, in *updateInput) (*typ
 	if err != nil {
 		return nil, nil, HandleError("%v", err)
 	}
+	targetDone := latSpan("uow:proxiedClaimTarget(" + id + ")")
 	before, fail := proxiedClaimTarget(ctx, id)
+	targetDone()
 	if fail != nil {
 		return nil, fail, nil
 	}
@@ -252,6 +261,7 @@ func applyClaimProxiedOne(ctx context.Context, id string, in *updateInput) (*typ
 	}
 	notesOverwritten := replacesExistingNotes(before.Notes, in.fields)
 
+	claimDone := latSpan("uow:Update(claim " + id + ")")
 	result, err := runCommandUpdateMutation(ctx, ops, commandUpdateMutation{
 		actor:   actor,
 		issueID: id,
@@ -263,6 +273,7 @@ func applyClaimProxiedOne(ctx context.Context, id string, in *updateInput) (*typ
 		// request contract requires of a claim.
 		provenance: fmt.Sprintf("bd: update %s", id),
 	})
+	claimDone()
 	if err != nil {
 		// Cancellation is not a verdict on this issue — SIGINT cancels bd's
 		// root context, and every remaining id in the batch would fail the same
@@ -303,7 +314,10 @@ func applyClaimProxiedOne(ctx context.Context, id string, in *updateInput) (*typ
 	if notesOverwritten {
 		warnNotesReplacement(id)
 	}
-	if err := fireProxiedUpdateHooks(ctx, before, updated); err != nil {
+	hooksDone := latSpan("update:fireHooks(" + id + ")")
+	err = fireProxiedUpdateHooks(ctx, before, updated)
+	hooksDone()
+	if err != nil {
 		fmt.Fprintf(os.Stderr, "warning: %s: %v\n", id, err)
 	}
 	return updated, nil, nil

@@ -952,7 +952,10 @@ Non-interactive mode (--non-interactive or BD_NON_INTERACTIVE=1):
 			// Create/update .gitignore in .beads directory: full template when
 			// missing, append-only for missing required patterns otherwise —
 			// never a wholesale rewrite, which destroyed local rules (bd-kaaz3)
-			if err := doctor.EnsureGitignoreForBeadsDir(beadsDir); err != nil {
+			gitignoreDone := latSpan("init:EnsureGitignore")
+			err := doctor.EnsureGitignoreForBeadsDir(beadsDir)
+			gitignoreDone()
+			if err != nil {
 				fmt.Fprintf(os.Stderr, "Warning: failed to create/update .gitignore: %v\n", err)
 				// Non-fatal - continue anyway
 			}
@@ -1257,7 +1260,10 @@ Non-interactive mode (--non-interactive or BD_NON_INTERACTIVE=1):
 			if sharedDir, err := doltserver.SharedServerDir(); err == nil {
 				state, _ := doltserver.IsRunning(sharedDir)
 				if state == nil || !state.Running {
-					if _, startErr := doltserver.Start(sharedDir); startErr != nil {
+					startDone := latSpan("init:doltserver.Start(shared)")
+					_, startErr := doltserver.Start(sharedDir)
+					startDone()
+					if startErr != nil {
 						fmt.Fprintf(os.Stderr, "Error: failed to start shared Dolt server: %v\n", startErr)
 						return &exitError{Code: 1}
 					}
@@ -1285,7 +1291,10 @@ Non-interactive mode (--non-interactive or BD_NON_INTERACTIVE=1):
 			if serverUser != "" {
 				globalUser = serverUser
 			}
-			if err := doltserver.EnsureGlobalDatabase(globalHost, globalPort, globalUser, ""); err != nil {
+			globalDBDone := latSpan("init:EnsureGlobalDatabase")
+			err := doltserver.EnsureGlobalDatabase(globalHost, globalPort, globalUser, "")
+			globalDBDone()
+			if err != nil {
 				fmt.Fprintf(os.Stderr, "Warning: failed to create global database: %v\n", err)
 				// Non-fatal — project init should succeed even if global DB creation fails
 			} else if !quiet {
@@ -1293,7 +1302,9 @@ Non-interactive mode (--non-interactive or BD_NON_INTERACTIVE=1):
 			}
 		}
 
+		storeOpenDone := latSpan("init:newDoltStore")
 		store, err := newDoltStore(ctx, doltCfg)
+		storeOpenDone()
 		if err != nil {
 			// #4259: the remote-migrate gate refused to auto-apply pending
 			// migrations. When init just bootstrapped the clone, the REMOTE is
@@ -1367,7 +1378,10 @@ Non-interactive mode (--non-interactive or BD_NON_INTERACTIVE=1):
 			return err
 		}
 		if writePrefix {
-			if err := store.SetConfig(ctx, "issue_prefix", issuePrefix); err != nil {
+			prefixDone := latSpan("store:SetConfig(issue_prefix)")
+			err := store.SetConfig(ctx, "issue_prefix", issuePrefix)
+			prefixDone()
+			if err != nil {
 				_ = store.Close()
 				return fmt.Errorf("failed to set issue prefix: %v", err)
 			}
@@ -1552,7 +1566,10 @@ Non-interactive mode (--non-interactive or BD_NON_INTERACTIVE=1):
 
 			}
 
-			if err := cfg.Save(beadsDir); err != nil {
+			saveDone := latSpan("init:metadata.Save")
+			err = cfg.Save(beadsDir)
+			saveDone()
+			if err != nil {
 				fmt.Fprintf(os.Stderr, "Warning: failed to create metadata.json: %v\n", err)
 				// Non-fatal - continue anyway
 			}
