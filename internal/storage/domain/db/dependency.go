@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/steveyegge/beads/internal/latency"
 	"github.com/steveyegge/beads/internal/storage"
 	"github.com/steveyegge/beads/internal/storage/dberrors"
 	"github.com/steveyegge/beads/internal/storage/depid"
@@ -348,9 +349,13 @@ func (r *dependencySQLRepositoryImpl) ListByIssueIDs(ctx context.Context, issueI
 		return result, nil
 	}
 
+	table := pickDepTable(opts.UseWispsTable)
+	defer latency.Span(fmt.Sprintf("depRepo:ListByIssueIDs(%s,%d ids)", table, len(issueIDs)))()
+
+	buildDone := latency.Span("depRepo:ListByIssueIDs/buildArgs")
 	idPlaceholders, idArgs := buildInPlaceholders(issueIDs)
 	typeWhere, typeArgs := buildTypeFilter(opts.Types)
-	table := pickDepTable(opts.UseWispsTable)
+	buildDone()
 
 	if opts.Direction == domain.DepDirectionBoth || opts.Direction == domain.DepDirectionOut {
 		//nolint:gosec // G201: table and depSelectColumns are hardcoded
@@ -359,7 +364,11 @@ func (r *dependencySQLRepositoryImpl) ListByIssueIDs(ctx context.Context, issueI
 			depSelectColumns, table, idPlaceholders, typeWhere,
 		)
 		args := combineArgs(idArgs, typeArgs)
-		if err := r.queryDeps(ctx, q, args, result.Outgoing, true); err != nil {
+		latency.Printf("SQL depRepo:ListByIssueIDs(out): %s\n", interpolateSQL(q, args))
+		queryDone := latency.Span(fmt.Sprintf("depRepo:ListByIssueIDs/queryDeps(out,%s)", table))
+		err := r.queryDeps(ctx, q, args, result.Outgoing, true)
+		queryDone()
+		if err != nil {
 			return domain.DepBulkResult{}, fmt.Errorf("db: DependencySQLRepository.ListByIssueIDs (out): %w", err)
 		}
 	}
@@ -371,12 +380,50 @@ func (r *dependencySQLRepositoryImpl) ListByIssueIDs(ctx context.Context, issueI
 			depSelectColumns, table, depTargetExpr, idPlaceholders, typeWhere,
 		)
 		args := combineArgs(idArgs, typeArgs)
-		if err := r.queryDeps(ctx, q, args, result.Incoming, false); err != nil {
+		latency.Printf("SQL depRepo:ListByIssueIDs(in): %s\n", interpolateSQL(q, args))
+		queryDone := latency.Span(fmt.Sprintf("depRepo:ListByIssueIDs/queryDeps(in,%s)", table))
+		err := r.queryDeps(ctx, q, args, result.Incoming, false)
+		queryDone()
+		if err != nil {
 			return domain.DepBulkResult{}, fmt.Errorf("db: DependencySQLRepository.ListByIssueIDs (in): %w", err)
 		}
 	}
 
 	return result, nil
+}
+
+func interpolateSQL(q string, args []any) string {
+	var b strings.Builder
+	next := 0
+	for _, ch := range q {
+		if ch == '?' && next < len(args) {
+			b.WriteString(sqlLiteral(args[next]))
+			next++
+			continue
+		}
+		b.WriteRune(ch)
+	}
+	return b.String()
+}
+
+func sqlLiteral(v any) string {
+	switch t := v.(type) {
+	case nil:
+		return "NULL"
+	case string:
+		return "'" + strings.ReplaceAll(t, "'", "''") + "'"
+	case time.Time:
+		return "'" + t.UTC().Format("2006-01-02 15:04:05.999999") + "'"
+	case []byte:
+		return "'" + strings.ReplaceAll(string(t), "'", "''") + "'"
+	case bool:
+		if t {
+			return "1"
+		}
+		return "0"
+	default:
+		return fmt.Sprintf("%v", t)
+	}
 }
 
 func (r *dependencySQLRepositoryImpl) CountsByIssueIDs(ctx context.Context, issueIDs []string, opts domain.DepCountsOpts) (map[string]*types.DependencyCounts, error) {

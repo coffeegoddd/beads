@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"sort"
 
+	"github.com/steveyegge/beads/internal/latency"
 	"github.com/steveyegge/beads/internal/storage"
 	"github.com/steveyegge/beads/internal/storage/dberrors"
 	"github.com/steveyegge/beads/internal/types"
@@ -428,7 +429,11 @@ func (u *dependencyUseCaseImpl) GetForIssueIDs(ctx context.Context, ids []string
 	if len(ids) == 0 {
 		return map[string][]*types.Dependency{}, nil
 	}
+	defer latency.Span(fmt.Sprintf("dep:GetForIssueIDs(%d ids)", len(ids)))()
+
+	issuesDone := latency.Span("dep:GetForIssueIDs/ListByIssueIDs(dependencies)")
 	issueRes, err := u.depRepo.ListByIssueIDs(ctx, ids, DepListOpts{Direction: DepDirectionOut})
+	issuesDone()
 	if err != nil {
 		return nil, fmt.Errorf("GetForIssueIDs: %w", err)
 	}
@@ -436,13 +441,17 @@ func (u *dependencyUseCaseImpl) GetForIssueIDs(ctx context.Context, ids []string
 	if out == nil {
 		out = make(map[string][]*types.Dependency)
 	}
+	wispsDone := latency.Span("dep:GetForIssueIDs/ListByIssueIDs(wisp_dependencies)")
 	wispRes, err := u.depRepo.ListByIssueIDs(ctx, ids, DepListOpts{Direction: DepDirectionOut, UseWispsTable: true})
+	wispsDone()
 	if err != nil && !dberrors.IsTableNotExist(err) {
 		return nil, fmt.Errorf("GetForIssueIDs (wisps): %w", err)
 	}
+	mergeDone := latency.Span("dep:GetForIssueIDs/merge")
 	for id, deps := range wispRes.Outgoing {
 		out[id] = append(out[id], deps...)
 	}
+	mergeDone()
 	return out, nil
 }
 
