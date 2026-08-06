@@ -137,6 +137,9 @@ type DependencySQLRepository interface {
 	Delete(ctx context.Context, issueID, dependsOnID, actor string, opts DepInsertOpts) (DepDeleteResult, error)
 	HasCycle(ctx context.Context, issueID, dependsOnID string) (bool, error)
 	ListByIssueIDs(ctx context.Context, issueIDs []string, opts DepListOpts) (DepBulkResult, error)
+	ListByIssueID(ctx context.Context, issueID string, opts DepListOpts) (DepBulkResult, error)
+	ListByIssueIDs2(ctx context.Context, issueIDs []string, opts DepListOpts) (DepBulkResult, error)
+	ListByIssueFilter(ctx context.Context, query string, filter types.IssueFilter, opts DepListOpts) (DepBulkResult, error)
 	ListWithIssueMetadata(ctx context.Context, sourceID string, opts DepListOpts) ([]*types.IssueWithDependencyMetadata, error)
 	IterWithIssueMetadata(ctx context.Context, sourceID string, opts DepListOpts) (storage.Iter[types.IssueWithDependencyMetadata], error)
 	CountByID(ctx context.Context, sourceID string, opts DepListOpts) (int64, error)
@@ -178,6 +181,7 @@ type DependencyUseCase interface {
 	GetBlockingInfo(ctx context.Context, issueIDs []string) (BlockingInfo, error)
 	IsBlocked(ctx context.Context, issueID string) (bool, []string, error)
 	GetForIssueIDs(ctx context.Context, ids []string) (map[string][]*types.Dependency, error)
+	GetForIssueFilter(ctx context.Context, query string, filter types.IssueFilter) (map[string][]*types.Dependency, error)
 	DetectCycles(ctx context.Context) ([][]*types.Issue, error)
 
 	GetDependencyTree(ctx context.Context, rootID string, opts DepTreeOpts) ([]*types.TreeNode, error)
@@ -431,8 +435,8 @@ func (u *dependencyUseCaseImpl) GetForIssueIDs(ctx context.Context, ids []string
 	}
 	defer latency.Span(fmt.Sprintf("dep:GetForIssueIDs(%d ids)", len(ids)))()
 
-	issuesDone := latency.Span("dep:GetForIssueIDs/ListByIssueIDs(dependencies)")
-	issueRes, err := u.depRepo.ListByIssueIDs(ctx, ids, DepListOpts{Direction: DepDirectionOut})
+	issuesDone := latency.Span("dep:GetForIssueIDs/ListByIssueIDs2(dependencies)")
+	issueRes, err := u.depRepo.ListByIssueIDs2(ctx, ids, DepListOpts{Direction: DepDirectionOut})
 	issuesDone()
 	if err != nil {
 		return nil, fmt.Errorf("GetForIssueIDs: %w", err)
@@ -441,13 +445,42 @@ func (u *dependencyUseCaseImpl) GetForIssueIDs(ctx context.Context, ids []string
 	if out == nil {
 		out = make(map[string][]*types.Dependency)
 	}
-	wispsDone := latency.Span("dep:GetForIssueIDs/ListByIssueIDs(wisp_dependencies)")
-	wispRes, err := u.depRepo.ListByIssueIDs(ctx, ids, DepListOpts{Direction: DepDirectionOut, UseWispsTable: true})
+	wispsDone := latency.Span("dep:GetForIssueIDs/ListByIssueIDs2(wisp_dependencies)")
+	wispRes, err := u.depRepo.ListByIssueIDs2(ctx, ids, DepListOpts{Direction: DepDirectionOut, UseWispsTable: true})
 	wispsDone()
 	if err != nil && !dberrors.IsTableNotExist(err) {
 		return nil, fmt.Errorf("GetForIssueIDs (wisps): %w", err)
 	}
 	mergeDone := latency.Span("dep:GetForIssueIDs/merge")
+	for id, deps := range wispRes.Outgoing {
+		out[id] = append(out[id], deps...)
+	}
+	mergeDone()
+	return out, nil
+}
+
+func (u *dependencyUseCaseImpl) GetForIssueFilter(ctx context.Context, query string, filter types.IssueFilter) (map[string][]*types.Dependency, error) {
+	defer latency.Span("dep:GetForIssueFilter")()
+
+	issuesDone := latency.Span("dep:GetForIssueFilter/ListByIssueFilter(dependencies)")
+	issueRes, err := u.depRepo.ListByIssueFilter(ctx, query, filter, DepListOpts{Direction: DepDirectionOut})
+	issuesDone()
+	if err != nil {
+		return nil, fmt.Errorf("GetForIssueFilter: %w", err)
+	}
+	out := issueRes.Outgoing
+	if out == nil {
+		out = make(map[string][]*types.Dependency)
+	}
+
+	wispsDone := latency.Span("dep:GetForIssueFilter/ListByIssueFilter(wisp_dependencies)")
+	wispRes, err := u.depRepo.ListByIssueFilter(ctx, query, filter, DepListOpts{Direction: DepDirectionOut, UseWispsTable: true})
+	wispsDone()
+	if err != nil && !dberrors.IsTableNotExist(err) {
+		return nil, fmt.Errorf("GetForIssueFilter (wisps): %w", err)
+	}
+
+	mergeDone := latency.Span("dep:GetForIssueFilter/merge")
 	for id, deps := range wispRes.Outgoing {
 		out[id] = append(out[id], deps...)
 	}

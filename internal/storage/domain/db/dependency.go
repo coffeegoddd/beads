@@ -364,7 +364,6 @@ func (r *dependencySQLRepositoryImpl) ListByIssueIDs(ctx context.Context, issueI
 			depSelectColumns, table, idPlaceholders, typeWhere,
 		)
 		args := combineArgs(idArgs, typeArgs)
-		latency.Printf("SQL depRepo:ListByIssueIDs(out): %s\n", interpolateSQL(q, args))
 		queryDone := latency.Span(fmt.Sprintf("depRepo:ListByIssueIDs/queryDeps(out,%s)", table))
 		err := r.queryDeps(ctx, q, args, result.Outgoing, true)
 		queryDone()
@@ -380,7 +379,6 @@ func (r *dependencySQLRepositoryImpl) ListByIssueIDs(ctx context.Context, issueI
 			depSelectColumns, table, depTargetExpr, idPlaceholders, typeWhere,
 		)
 		args := combineArgs(idArgs, typeArgs)
-		latency.Printf("SQL depRepo:ListByIssueIDs(in): %s\n", interpolateSQL(q, args))
 		queryDone := latency.Span(fmt.Sprintf("depRepo:ListByIssueIDs/queryDeps(in,%s)", table))
 		err := r.queryDeps(ctx, q, args, result.Incoming, false)
 		queryDone()
@@ -392,38 +390,129 @@ func (r *dependencySQLRepositoryImpl) ListByIssueIDs(ctx context.Context, issueI
 	return result, nil
 }
 
-func interpolateSQL(q string, args []any) string {
-	var b strings.Builder
-	next := 0
-	for _, ch := range q {
-		if ch == '?' && next < len(args) {
-			b.WriteString(sqlLiteral(args[next]))
-			next++
-			continue
-		}
-		b.WriteRune(ch)
+func (r *dependencySQLRepositoryImpl) ListByIssueID(ctx context.Context, issueID string, opts domain.DepListOpts) (domain.DepBulkResult, error) {
+	result := domain.DepBulkResult{
+		Outgoing: make(map[string][]*types.Dependency),
+		Incoming: make(map[string][]*types.Dependency),
 	}
-	return b.String()
+	if issueID == "" {
+		return result, nil
+	}
+
+	table := pickDepTable(opts.UseWispsTable)
+	defer latency.Span(fmt.Sprintf("depRepo:ListByIssueID(%s,%s)", table, issueID))()
+
+	typeWhere, typeArgs := buildTypeFilter(opts.Types)
+
+	if opts.Direction == domain.DepDirectionBoth || opts.Direction == domain.DepDirectionOut {
+		//nolint:gosec // G201: table and depSelectColumns are hardcoded
+		q := fmt.Sprintf(
+			`SELECT %s FROM %s WHERE issue_id = ?%s ORDER BY issue_id`,
+			depSelectColumns, table, typeWhere,
+		)
+		args := combineArgs([]any{issueID}, typeArgs)
+		queryDone := latency.Span(fmt.Sprintf("depRepo:ListByIssueID/queryDeps(out,%s,%s)", table, issueID))
+		err := r.queryDeps(ctx, q, args, result.Outgoing, true)
+		queryDone()
+		if err != nil {
+			return domain.DepBulkResult{}, fmt.Errorf("db: DependencySQLRepository.ListByIssueID (out): %w", err)
+		}
+	}
+
+	if opts.Direction == domain.DepDirectionBoth || opts.Direction == domain.DepDirectionIn {
+		//nolint:gosec // G201: table, depSelectColumns, depTargetExpr are hardcoded
+		q := fmt.Sprintf(
+			`SELECT %s FROM %s WHERE %s = ?%s ORDER BY issue_id`,
+			depSelectColumns, table, depTargetExpr, typeWhere,
+		)
+		args := combineArgs([]any{issueID}, typeArgs)
+		queryDone := latency.Span(fmt.Sprintf("depRepo:ListByIssueID/queryDeps(in,%s,%s)", table, issueID))
+		err := r.queryDeps(ctx, q, args, result.Incoming, false)
+		queryDone()
+		if err != nil {
+			return domain.DepBulkResult{}, fmt.Errorf("db: DependencySQLRepository.ListByIssueID (in): %w", err)
+		}
+	}
+
+	return result, nil
 }
 
-func sqlLiteral(v any) string {
-	switch t := v.(type) {
-	case nil:
-		return "NULL"
-	case string:
-		return "'" + strings.ReplaceAll(t, "'", "''") + "'"
-	case time.Time:
-		return "'" + t.UTC().Format("2006-01-02 15:04:05.999999") + "'"
-	case []byte:
-		return "'" + strings.ReplaceAll(string(t), "'", "''") + "'"
-	case bool:
-		if t {
-			return "1"
-		}
-		return "0"
-	default:
-		return fmt.Sprintf("%v", t)
+func (r *dependencySQLRepositoryImpl) ListByIssueFilter(ctx context.Context, query string, filter types.IssueFilter, opts domain.DepListOpts) (domain.DepBulkResult, error) {
+	result := domain.DepBulkResult{
+		Outgoing: make(map[string][]*types.Dependency),
+		Incoming: make(map[string][]*types.Dependency),
 	}
+
+	table := pickDepTable(opts.UseWispsTable)
+	defer latency.Span(fmt.Sprintf("depRepo:ListByIssueFilter(%s)", table))()
+
+	subDone := latency.Span("depRepo:ListByIssueFilter/buildPageIDSubquery")
+	idSub, idArgs, err := buildPageIDSubquery(ctx, r.runner, query, filter)
+	subDone()
+	if err != nil {
+		return domain.DepBulkResult{}, fmt.Errorf("db: DependencySQLRepository.ListByIssueFilter: %w", err)
+	}
+
+	typeWhere, typeArgs := buildTypeFilter(opts.Types)
+	args := combineArgs(idArgs, typeArgs)
+
+	if opts.Direction == domain.DepDirectionBoth || opts.Direction == domain.DepDirectionOut {
+		//nolint:gosec // G201: table and depSelectColumns are hardcoded; idSub is built from fixed table names and ? placeholders.
+		q := fmt.Sprintf(
+			`SELECT %s FROM %s JOIN (%s) page ON %s.issue_id = page.id%s ORDER BY issue_id, depends_on_id, type`,
+			depSelectColumns, table, idSub, table, typeWhere,
+		)
+		queryDone := latency.Span(fmt.Sprintf("depRepo:ListByIssueFilter/queryDeps(out,%s)", table))
+		err := r.queryDeps(ctx, q, args, result.Outgoing, true)
+		queryDone()
+		if err != nil {
+			return domain.DepBulkResult{}, fmt.Errorf("db: DependencySQLRepository.ListByIssueFilter (out): %w", err)
+		}
+	}
+
+	if opts.Direction == domain.DepDirectionBoth || opts.Direction == domain.DepDirectionIn {
+		//nolint:gosec // G201: table, depSelectColumns, depTargetExpr are hardcoded; idSub is built from fixed table names and ? placeholders.
+		q := fmt.Sprintf(
+			`SELECT %s FROM %s JOIN (%s) page ON %s = page.id%s ORDER BY issue_id, depends_on_id, type`,
+			depSelectColumns, table, idSub, depTargetExpr, typeWhere,
+		)
+		queryDone := latency.Span(fmt.Sprintf("depRepo:ListByIssueFilter/queryDeps(in,%s)", table))
+		err := r.queryDeps(ctx, q, args, result.Incoming, false)
+		queryDone()
+		if err != nil {
+			return domain.DepBulkResult{}, fmt.Errorf("db: DependencySQLRepository.ListByIssueFilter (in): %w", err)
+		}
+	}
+
+	return result, nil
+}
+
+func (r *dependencySQLRepositoryImpl) ListByIssueIDs2(ctx context.Context, issueIDs []string, opts domain.DepListOpts) (domain.DepBulkResult, error) {
+	result := domain.DepBulkResult{
+		Outgoing: make(map[string][]*types.Dependency),
+		Incoming: make(map[string][]*types.Dependency),
+	}
+	if len(issueIDs) == 0 {
+		return result, nil
+	}
+
+	table := pickDepTable(opts.UseWispsTable)
+	defer latency.Span(fmt.Sprintf("depRepo:ListByIssueIDs2(%s,%d ids)", table, len(issueIDs)))()
+
+	for _, id := range issueIDs {
+		one, err := r.ListByIssueID(ctx, id, opts)
+		if err != nil {
+			return domain.DepBulkResult{}, fmt.Errorf("db: DependencySQLRepository.ListByIssueIDs2: %w", err)
+		}
+		for k, deps := range one.Outgoing {
+			result.Outgoing[k] = append(result.Outgoing[k], deps...)
+		}
+		for k, deps := range one.Incoming {
+			result.Incoming[k] = append(result.Incoming[k], deps...)
+		}
+	}
+
+	return result, nil
 }
 
 func (r *dependencySQLRepositoryImpl) CountsByIssueIDs(ctx context.Context, issueIDs []string, opts domain.DepCountsOpts) (map[string]*types.DependencyCounts, error) {

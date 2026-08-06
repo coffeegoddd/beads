@@ -78,7 +78,7 @@ func runListProxiedSearch(_ *cobra.Command, ctx context.Context, in listInput) e
 
 	issues, hasMore := workapi.FinishPage(page.Items, in.SortBy, in.Reverse, in.effectiveLimit, page.HasMore)
 
-	return renderProxiedListText(ctx, uw, issues, in, hasMore)
+	return renderProxiedListText(ctx, uw, issues, in, hasMore, &filter)
 }
 
 func runListProxiedReady(_ *cobra.Command, ctx context.Context, in listInput) error {
@@ -109,7 +109,7 @@ func runListProxiedReady(_ *cobra.Command, ctx context.Context, in listInput) er
 
 	issues, hasMore := workapi.FinishPage(page.Items, in.SortBy, in.Reverse, in.effectiveLimit, page.HasMore)
 
-	return renderProxiedListText(ctx, uw, issues, in, hasMore)
+	return renderProxiedListText(ctx, uw, issues, in, hasMore, nil)
 }
 
 func runListProxiedWatch(_ *cobra.Command, ctx context.Context, in listInput) error {
@@ -157,7 +157,7 @@ func runListProxiedWatch(_ *cobra.Command, ctx context.Context, in listInput) er
 			issues, hasMore = workapi.FinishPage(page.Items, in.SortBy, in.Reverse, in.effectiveLimit, page.HasMore)
 		}
 
-		deps, err := loadDepsForIssues(ctx, uw, issues)
+		deps, err := loadDepsForIssues(ctx, uw, issues, nil)
 		if err != nil {
 			return nil, false, nil, err
 		}
@@ -223,7 +223,10 @@ func emitProxiedListJSONResult(iwc []*types.IssueWithCounts, in listInput, hasMo
 	return nil
 }
 
-func loadDepsForIssues(ctx context.Context, uw uow.UnitOfWork, issues []*types.Issue) (map[string][]*types.Dependency, error) {
+func loadDepsForIssues(ctx context.Context, uw uow.UnitOfWork, issues []*types.Issue, depFilter *types.IssueFilter) (map[string][]*types.Dependency, error) {
+	if depFilter != nil {
+		return uw.DependencyUseCase().GetForIssueFilter(ctx, "", *depFilter)
+	}
 	ids := make([]string, len(issues))
 	for i, issue := range issues {
 		ids[i] = issue.ID
@@ -231,10 +234,10 @@ func loadDepsForIssues(ctx context.Context, uw uow.UnitOfWork, issues []*types.I
 	return uw.DependencyUseCase().GetForIssueIDs(ctx, ids)
 }
 
-func renderProxiedListText(ctx context.Context, uw uow.UnitOfWork, issues []*types.Issue, in listInput, truncated bool) error {
+func renderProxiedListText(ctx context.Context, uw uow.UnitOfWork, issues []*types.Issue, in listInput, truncated bool, depFilter *types.IssueFilter) error {
 	if in.formatStr != "" {
 		depsDone := latSpan("uow:loadDepsForIssues(format)")
-		depsByIssueID, err := loadDepsForIssues(ctx, uw, issues)
+		depsByIssueID, err := loadDepsForIssues(ctx, uw, issues, depFilter)
 		depsDone()
 		if err != nil {
 			return err
@@ -251,7 +254,7 @@ func renderProxiedListText(ctx context.Context, uw uow.UnitOfWork, issues []*typ
 
 	if in.prettyFormat {
 		depsDone := latSpan("uow:loadDepsForIssues(pretty)")
-		depsByIssueID, err := loadDepsForIssues(ctx, uw, issues)
+		depsByIssueID, err := loadDepsForIssues(ctx, uw, issues, depFilter)
 		depsDone()
 		if err != nil {
 			return err
